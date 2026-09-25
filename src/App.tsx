@@ -61,6 +61,14 @@ function App() {
     setSelectedIds(prev => prev.filter(sid => sid !== id));
   }, [elements, pushHistory]);
 
+  const deleteElements = useCallback((ids: string[]) => {
+    if (ids.length === 0) return;
+    const newElements = elements.filter(el => !ids.includes(el.id));
+    setElements(newElements);
+    pushHistory(newElements);
+    setSelectedIds([]);
+  }, [elements, pushHistory]);
+
   const updateNodes = useCallback((elementId: string, nodes: NodePoint[]) => {
     setElements(prev => prev.map(el => {
       if (el.id !== elementId) return el;
@@ -404,7 +412,7 @@ function App() {
         if (e.key === 'e') { e.preventDefault(); setShowExport(true); }
         if (e.key === 'c') { e.preventDefault(); copySelected(); }
         if (e.key === 'v') { e.preventDefault(); pasteFromClipboard(); }
-        if (e.key === 'x') { e.preventDefault(); copySelected(); selectedIds.forEach(id => deleteElement(id)); }
+        if (e.key === 'x') { e.preventDefault(); copySelected(); deleteElements(selectedIds); }
         if (e.key === 'g') { e.preventDefault(); groupSelected(); }
         if (e.key === 'u') { e.preventDefault(); ungroupSelected(); }
         if (e.key === 'l') { e.preventDefault(); lockSelected(); }
@@ -422,7 +430,7 @@ function App() {
         case 'e': setCurrentTool('eraser'); break;
         case 'escape': setSelectedIds([]); setCurrentTool('select'); break;
         case 'delete': case 'backspace':
-          if (selectedIds.length > 0) selectedIds.forEach(id => deleteElement(id));
+          if (selectedIds.length > 0) deleteElements(selectedIds);
           break;
         case '=': case '+': setZoom(z => Math.min(z + 0.1, 3)); break;
         case '-': setZoom(z => Math.max(z - 0.1, 0.3)); break;
@@ -460,11 +468,11 @@ function App() {
         onExport={() => setShowExport(true)}
         onTemplates={() => setShowTemplates(true)}
         onFormulas={() => setShowLatexPanel(true)}
-        onDelete={() => selectedIds.forEach(id => deleteElement(id))}
+        onDelete={() => deleteElements(selectedIds)}
         onDuplicate={duplicateSelected}
         onCopy={copySelected}
         onPaste={pasteFromClipboard}
-        onCut={() => { copySelected(); selectedIds.forEach(id => deleteElement(id)); }}
+        onCut={() => { copySelected(); deleteElements(selectedIds); }}
         onGroup={groupSelected}
         onUngroup={ungroupSelected}
         onLock={lockSelected}
@@ -594,11 +602,11 @@ function App() {
           x={contextMenu.x}
           y={contextMenu.y}
           onClose={() => setContextMenu(null)}
-          onCut={() => { copySelected(); selectedIds.forEach(id => deleteElement(id)); }}
+          onCut={() => { copySelected(); deleteElements(selectedIds); }}
           onCopy={copySelected}
           onPaste={pasteFromClipboard}
           onDuplicate={duplicateSelected}
-          onDelete={() => selectedIds.forEach(id => deleteElement(id))}
+          onDelete={() => deleteElements(selectedIds)}
           onBringToFront={bringToFront}
           onSendToBack={sendToBack}
           hasSelection={selectedIds.length > 0}
