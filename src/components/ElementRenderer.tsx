@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { DiagramElement, Point } from '../types';
 
 interface ElementRendererProps {
@@ -18,7 +18,9 @@ const ElementRenderer: React.FC<ElementRendererProps> = ({
   onDoubleClick,
   tool,
 }) => {
-  const strokeColor = isSelected ? '#3B82F6' : element.color;
+  const [isHovered, setIsHovered] = useState(false);
+  
+  const strokeColor = isSelected ? '#3B82F6' : isHovered ? '#60A5FA' : element.color;
   const commonProps = {
     stroke: strokeColor,
     strokeWidth: element.strokeWidth,
@@ -26,9 +28,13 @@ const ElementRenderer: React.FC<ElementRendererProps> = ({
     onMouseDown,
     onClick,
     onDoubleClick,
+    onMouseEnter: () => setIsHovered(true),
+    onMouseLeave: () => setIsHovered(false),
     style: {
       cursor: tool === 'select' ? 'move' : tool === 'eraser' ? 'crosshair' : 'default',
       opacity: element.opacity ?? 1,
+      filter: isHovered && !isSelected ? 'drop-shadow(0 0 4px rgba(96, 165, 250, 0.5))' : 'none',
+      transition: 'filter 0.15s ease-out',
     } as React.CSSProperties,
   };
 
@@ -81,10 +87,18 @@ const ElementRenderer: React.FC<ElementRendererProps> = ({
       case 'rectangle':
       case 'mass':
       case 'label_box':
-      case 'cylinder':
+      case 'cylinder': {
+        const w = element.width || 60;
+        const h = element.height || 60;
         return (
-          <rect x={element.x} y={element.y} width={element.width || 60} height={element.height || 60} {...commonProps} />
+          <g {...commonProps}>
+            {/* Larger hit area */}
+            <rect x={element.x - 5} y={element.y - 5} width={w + 10} height={h + 10} fill="transparent" stroke="none" />
+            {/* Visible shape */}
+            <rect x={element.x} y={element.y} width={w} height={h} fill={element.fillColor || 'none'} stroke={strokeColor} strokeWidth={element.strokeWidth} pointerEvents="none" />
+          </g>
         );
+      }
 
       case 'circle':
       case 'pulley':
@@ -94,11 +108,14 @@ const ElementRenderer: React.FC<ElementRendererProps> = ({
         const r = (element.width || 50) / 2;
         return (
           <g {...commonProps}>
-            <circle cx={cx} cy={cy} r={r} />
-            {element.type === 'pulley' && <circle cx={cx} cy={cy} r={5} fill={element.color} stroke="none" />}
+            {/* Larger hit area */}
+            <circle cx={cx} cy={cy} r={r + 5} fill="transparent" stroke="none" />
+            {/* Visible shape */}
+            <circle cx={cx} cy={cy} r={r} fill={element.fillColor || 'none'} stroke={strokeColor} strokeWidth={element.strokeWidth} pointerEvents="none" />
+            {element.type === 'pulley' && <circle cx={cx} cy={cy} r={5} fill={element.color} stroke="none" pointerEvents="none" />}
             {element.type === 'nucleus' && (
               <>
-                <text x={cx} y={cy + 4} textAnchor="middle" fontSize="10" fill={element.color} stroke="none">p⁺n⁰</text>
+                <text x={cx} y={cy + 4} textAnchor="middle" fontSize="10" fill={element.color} stroke="none" pointerEvents="none">p⁺n⁰</text>
               </>
             )}
           </g>
@@ -110,7 +127,14 @@ const ElementRenderer: React.FC<ElementRendererProps> = ({
         const cy = element.y + (element.height || 50) / 2;
         const rx = (element.width || 80) / 2;
         const ry = (element.height || 50) / 2;
-        return <ellipse cx={cx} cy={cy} rx={rx} ry={ry} {...commonProps} />;
+        return (
+          <g {...commonProps}>
+            {/* Larger hit area */}
+            <ellipse cx={cx} cy={cy} rx={rx + 5} ry={ry + 5} fill="transparent" stroke="none" />
+            {/* Visible shape */}
+            <ellipse cx={cx} cy={cy} rx={rx} ry={ry} fill={element.fillColor || 'none'} stroke={strokeColor} strokeWidth={element.strokeWidth} pointerEvents="none" />
+          </g>
+        );
       }
 
       case 'polyline':
