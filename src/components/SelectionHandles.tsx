@@ -44,30 +44,51 @@ const SelectionHandles: React.FC<SelectionHandlesProps> = ({
     e.preventDefault();
 
     if (pos === 'rotate') {
-      const startX = e.clientX;
-      const startY = e.clientY;
-      const centerX = x + w / 2;
-      const centerY = y + h / 2;
       const svg = (e.currentTarget as SVGElement).closest('svg');
       if (!svg) return;
       const rect = svg.getBoundingClientRect();
+      
+      // Get pan offset from parent transform
+      const parentG = svg.querySelector('g');
+      const transform = parentG?.getAttribute('transform') || '';
+      const panMatch = transform.match(/translate\(([^,]+),\s*([^)]+)\)/);
+      const panX = panMatch ? parseFloat(panMatch[1]) : 0;
+      const panY = panMatch ? parseFloat(panMatch[2]) : 0;
+      
+      const centerX = x + w / 2;
+      const centerY = y + h / 2;
+      
+      const startMouseX = (e.clientX - rect.left - panX) / zoom;
+      const startMouseY = (e.clientY - rect.top - panY) / zoom;
+      
       const startAngle = Math.atan2(
-        (startY - rect.top) / zoom - centerY,
-        (startX - rect.left) / zoom - centerX
+        startMouseY - centerY,
+        startMouseX - centerX
       ) * 180 / Math.PI;
+      
       const initialRotation = element.rotation || 0;
+      const initialMouseAngle = startAngle;
 
       const handleMove = (moveEvent: MouseEvent) => {
+        const currentMouseX = (moveEvent.clientX - rect.left - panX) / zoom;
+        const currentMouseY = (moveEvent.clientY - rect.top - panY) / zoom;
+        
         const currentAngle = Math.atan2(
-          (moveEvent.clientY - rect.top) / zoom - centerY,
-          (moveEvent.clientX - rect.left) / zoom - centerX
+          currentMouseY - centerY,
+          currentMouseX - centerX
         ) * 180 / Math.PI;
-        const delta = currentAngle - startAngle;
+        
+        const delta = currentAngle - initialMouseAngle;
         let newRotation = initialRotation + delta;
+        
         // Snap to 15 degree increments when shift is held
         if (moveEvent.shiftKey) {
           newRotation = Math.round(newRotation / 15) * 15;
         }
+        
+        // Normalize to 0-360
+        newRotation = ((newRotation % 360) + 360) % 360;
+        
         onRotate(element.id, newRotation);
       };
 
@@ -86,11 +107,18 @@ const SelectionHandles: React.FC<SelectionHandlesProps> = ({
     if (!svg) return;
     const rect = svg.getBoundingClientRect();
     const original = { ...element };
+    
+    // Get pan offset from parent transform
+    const parentG = svg.querySelector('g');
+    const transform = parentG?.getAttribute('transform') || '';
+    const panMatch = transform.match(/translate\(([^,]+),\s*([^)]+)\)/);
+    const panX = panMatch ? parseFloat(panMatch[1]) : 0;
+    const panY = panMatch ? parseFloat(panMatch[2]) : 0;
 
     const handleMove = (moveEvent: MouseEvent) => {
       const point: Point = {
-        x: (moveEvent.clientX - rect.left) / zoom,
-        y: (moveEvent.clientY - rect.top) / zoom,
+        x: (moveEvent.clientX - rect.left - panX) / zoom,
+        y: (moveEvent.clientY - rect.top - panY) / zoom,
       };
       onResize(element.id, pos, point, original);
     };
