@@ -3,6 +3,8 @@ import { DiagramElement, Tool, Point, NodePoint } from '../types';
 import katex from 'katex';
 import ElementRenderer from './ElementRenderer';
 import NodesOverlay from './NodesOverlay';
+import SelectionHandles from './SelectionHandles';
+import SnapGuides from './SnapGuides';
 
 interface CanvasProps {
   elements: DiagramElement[];
@@ -21,33 +23,40 @@ interface CanvasProps {
   onAddNode: (elementId: string, point: Point, afterIndex?: number) => void;
 }
 
+const GRID_SIZE = 20;
+const SNAP_THRESHOLD = 5;
+
 const Canvas: React.FC<CanvasProps> = ({
-  elements,
-  selectedIds,
-  tool,
-  onAddElement,
-  onUpdateElement,
-  onSelectElements,
-  onDeleteElement,
-  zoom,
-  showGrid = true,
-  svgRef: externalSvgRef,
-  onUpdateNodes,
-  onUpdatePoints,
-  onDeleteNode,
-  onAddNode,
+  elements, selectedIds, tool, onAddElement, onUpdateElement,
+  onSelectElements, onDeleteElement, zoom, showGrid = true,
+  svgRef: externalSvgRef, onUpdateNodes, onUpdatePoints, onDeleteNode, onAddNode,
 }) => {
   const internalSvgRef = useRef<SVGSVGElement>(null);
   const svgRef = externalSvgRef || internalSvgRef;
+
+  // Drawing state
   const [isDrawing, setIsDrawing] = useState(false);
-  const [startPoint, setStartPoint] = useState<Point | null>(null);
-  const [currentPoint, setCurrentPoint] = useState<Point | null>(null);
-  const [dragOffset, setDragOffset] = useState<Map<string, Point>>(new Map());
+  const [drawStart, setDrawStart] = useState<Point | null>(null);
+  const [drawCurrent, setDrawCurrent] = useState<Point | null>(null);
+
+  // Selection/moving state
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState<Point | null>(null);
+  const [dragOffsets, setDragOffsets] = useState<Map<string, Point>>(new Map());
+
+  // Marquee selection
+  const [isMarquee, setIsMarquee] = useState(false);
+  const [marqueeStart, setMarqueeStart] = useState<Point | null>(null);
+  const [marqueeEnd, setMarqueeEnd] = useState<Point | null>(null);
+
+  // Snap guides
+  const [snapGuides, setSnapGuides] = useState<{ type: 'x' | 'y'; position: number; length: number; start: number }[]>([]);
+
+  // LaTeX editing
   const [editingLatex, setEditingLatex] = useState<string | null>(null);
   const [latexInput, setLatexInput] = useState('');
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
 
-  const getSVGPoint = useCallback((e: React.MouseEvent): Point => {
+  const getSVGPoint = useCallback((e: React.MouseEvent | MouseEvent): Point => {
     const svg = svgRef.current;
     if (!svg) return { x: 0, y: 0 };
     const rect = svg.getBoundingClientRect();
@@ -57,282 +66,324 @@ const Canvas: React.FC<CanvasProps> = ({
     };
   }, [zoom, svgRef]);
 
+  // Snap to grid
+  const snapToGrid = useCallback((point: Point): { point: Point; guides: typeof snapGuides } => {
+    const guides: typeof snapGuides = [];
+    let snappedX = point.x;
+    let snappedY = point.y;
+
+    // Snap to grid
+    const gridX = Math.round(point.x / GRID_SIZE) * GRID_SIZE;
+    const gridY = Math.round(point.y / GRID_SIZE) * GRID_SIZE;
+
+    if (Math.abs(point.x - gridX) < SNAP_THRESHOLD) {
+      snappedX = gridX;
+      guides.push({ type: 'x', position: gridX, length: 1000, start: -500 });
+    }
+    if (Math.abs(point.y - gridY) < SNAP_THRESHOLD) {
+      snappedY = gridY;
+      guides.push({ type: 'y', position: gridY, length: 1000, start: -500 });
+    }
+
+    // Snap to other elements
+    elements.forEach(el => {
+      if (selectedIds.includes(el.id)) return;
+      const elCenterX = el.x + (el.width || 0) / 2;
+      const elCenterY = el.y + (el.height || 0) / 2;
+
+      if (Math.abs(point.x - elCenterX) < SNAP_THRESHOLD) {
+        snappedX = elCenterX;
+        guides.push({ type: 'x', position: elCenterX, length: el.height || 60, start: el.y });
+      }
+      if (Math.abs(point.x - el.x) < SNAP_THRESHOLD) {
+        snappedX = el.x;
+        guides.push({ type: 'x', position: el.x, length: el.height || 60, start: el.y });
+      }
+      if (Math.abs(point.y - elCenterY) < SNAP_THRESHOLD) {
+        snappedY = elCenterY;
+        guides.push({ type: 'y', position: elCenterY, length: el.width || 60, start: el.x });
+      }
+      if (Math.abs(point.y - el.y) < SNAP_THRESHOLD) {
+        snappedY = el.y;
+        guides.push({ type: 'y', position: el.y, length: el.width || 60, start: el.x });
+      }
+    });
+
+    return { point: { x: snappedX, y: snappedY }, guides };
+  }, [elements, selectedIds]);
+
+  // Mouse handlers
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return; // Only left click
     const point = getSVGPoint(e);
 
     if (tool === 'select') {
-      // Deselect if clicking on empty space
+      // Start marquee selection
+      setIsMarquee(true);
+      setMarqueeStart(point);
+      setMarqueeEnd(point);
       if (!e.shiftKey) {
         onSelectElements([]);
       }
-      return;
+    } else if (tool === 'eraser') {
+      // Eraser handled by element click
+    } else {
+      // Start drawing
+      setIsDrawing(true);
+      setDrawStart(point);
+      setDrawCurrent(point);
     }
-
-    if (tool === 'eraser') {
-      return;
-    }
-
-    setIsDrawing(true);
-    setStartPoint(point);
-    setCurrentPoint(point);
   }, [tool, getSVGPoint, onSelectElements]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!isDrawing || !startPoint) return;
     const point = getSVGPoint(e);
-    setCurrentPoint(point);
-  }, [isDrawing, startPoint, getSVGPoint]);
+
+    if (isDrawing && drawStart) {
+      setDrawCurrent(point);
+    } else if (isMarquee && marqueeStart) {
+      setMarqueeEnd(point);
+    } else if (isDragging && dragStart) {
+      const dx = point.x - dragStart.x;
+      const dy = point.y - dragStart.y;
+
+      dragOffsets.forEach((offset, id) => {
+        const newPos = { x: offset.x + dx, y: offset.y + dy };
+        const snapped = snapToGrid(newPos);
+        onUpdateElement(id, { x: snapped.point.x, y: snapped.point.y });
+        setSnapGuides(snapped.guides);
+      });
+    }
+  }, [isDrawing, drawStart, isMarquee, marqueeStart, isDragging, dragStart, dragOffsets, getSVGPoint, snapToGrid, onUpdateElement]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
-    if (!isDrawing || !startPoint) return;
     const point = getSVGPoint(e);
-    setIsDrawing(false);
 
-    const id = crypto.randomUUID();
-    const newElement: DiagramElement = {
-      id,
-      type: tool,
-      x: startPoint.x,
-      y: startPoint.y,
-      width: Math.abs(point.x - startPoint.x),
-      height: Math.abs(point.y - startPoint.y),
-      color: '#1f2937',
-      strokeWidth: 2,
-      points: [startPoint, point],
-      nodes: [],
-    };
+    if (isDrawing && drawStart) {
+      // Create element with dragged bounds
+      const x = Math.min(drawStart.x, point.x);
+      const y = Math.min(drawStart.y, point.y);
+      const w = Math.abs(point.x - drawStart.x);
+      const h = Math.abs(point.y - drawStart.y);
 
-    // Generate nodes for line-based elements
-    if (tool === 'line' || tool === 'arrow' || tool === 'wire' || tool === 'fieldline' || tool === 'force' || tool === 'ray' || tool === 'decay_arrow' || tool === 'dimension') {
-      newElement.nodes = [
-        { id: crypto.randomUUID(), x: startPoint.x, y: startPoint.y, type: 'vertex' },
-        { id: crypto.randomUUID(), x: point.x, y: point.y, type: 'vertex' },
-      ];
-      newElement.points = [startPoint, point];
-    } else if (tool === 'polyline' || tool === 'polygon') {
-      newElement.nodes = [
-        { id: crypto.randomUUID(), x: startPoint.x, y: startPoint.y, type: 'vertex' },
-        { id: crypto.randomUUID(), x: point.x, y: point.y, type: 'vertex' },
-      ];
-      newElement.points = [startPoint, point];
-    } else if (tool === 'text') {
-      newElement.text = 'Text';
-      newElement.fontSize = 16;
-      newElement.width = 100;
-      newElement.height = 30;
-    } else if (tool === 'latex') {
-      newElement.latex = 'E = mc^2';
-      newElement.width = 150;
-      newElement.height = 40;
-    } else if (tool === 'rectangle' || tool === 'ellipse') {
-      newElement.width = Math.abs(point.x - startPoint.x);
-      newElement.height = Math.abs(point.y - startPoint.y);
-      newElement.x = Math.min(startPoint.x, point.x);
-      newElement.y = Math.min(startPoint.y, point.y);
-    } else if (tool === 'circle') {
-      const radius = Math.sqrt(Math.pow(point.x - startPoint.x, 2) + Math.pow(point.y - startPoint.y, 2));
-      newElement.width = radius * 2;
-      newElement.height = radius * 2;
-    } else {
-      // Default sizes for physics elements
-      const defaultSizes: Record<string, { w: number; h: number }> = {
-        resistor: { w: 60, h: 40 }, capacitor: { w: 60, h: 40 }, inductor: { w: 80, h: 40 },
-        battery: { w: 60, h: 40 }, diode: { w: 60, h: 40 }, led: { w: 60, h: 40 },
-        transistor: { w: 60, h: 60 }, ground: { w: 40, h: 40 }, mass: { w: 60, h: 60 },
-        pulley: { w: 50, h: 50 }, spring: { w: 100, h: 30 }, magnet: { w: 80, h: 30 },
-        coil: { w: 80, h: 40 }, solenoid: { w: 80, h: 40 }, charge: { w: 30, h: 30 },
-        lens: { w: 20, h: 80 }, mirror: { w: 20, h: 80 }, prism: { w: 60, h: 60 },
-        wave: { w: 120, h: 40 }, standing_wave: { w: 150, h: 60 }, pulse: { w: 80, h: 40 },
-        axes: { w: 100, h: 100 }, incline: { w: 120, h: 80 }, pendulum: { w: 80, h: 100 },
-        lever: { w: 150, h: 10 }, fulcrum: { w: 40, h: 40 }, wedge: { w: 40, h: 40 },
-        ammeter: { w: 40, h: 40 }, voltmeter: { w: 40, h: 40 }, switch: { w: 60, h: 30 },
-        bulb: { w: 40, h: 40 }, transformer: { w: 80, h: 60 }, opamp: { w: 70, h: 60 },
-        logic_and: { w: 50, h: 40 }, logic_or: { w: 50, h: 40 }, logic_not: { w: 50, h: 40 },
-        emwave: { w: 150, h: 80 }, current_loop: { w: 60, h: 60 },
-        diffraction_grating: { w: 10, h: 80 }, ray: { w: 80, h: 0 },
-        optical_axis: { w: 200, h: 0 }, piston: { w: 80, h: 100 }, cylinder: { w: 60, h: 80 },
-        flame: { w: 30, h: 40 }, thermometer: { w: 20, h: 80 },
-        atom: { w: 80, h: 80 }, nucleus: { w: 40, h: 40 },
-        energy_level: { w: 100, h: 120 }, decay_arrow: { w: 80, h: 0 },
-        protractor: { w: 80, h: 50 }, angle_arc: { w: 30, h: 30 },
-        dimension: { w: 100, h: 0 }, label_box: { w: 100, h: 40 }, cloud: { w: 120, h: 80 },
+      // Minimum size
+      const minSize = 10;
+      const width = Math.max(w, minSize);
+      const height = Math.max(h, minSize);
+
+      const id = crypto.randomUUID();
+      const newElement: DiagramElement = {
+        id, type: tool,
+        x, y, width, height,
+        color: '#1f2937', strokeWidth: 2,
+        nodes: [],
       };
-      const size = defaultSizes[tool] || { w: 60, h: 40 };
-      newElement.width = size.w;
-      newElement.height = size.h;
+
+      // Set default content
+      if (tool === 'text') newElement.text = 'Text';
+      if (tool === 'latex') newElement.latex = 'E = mc^2';
+
+      // Set points for line-based elements
+      if (['line', 'arrow', 'wire', 'force', 'ray', 'decay_arrow', 'dimension', 'optical_axis', 'fieldline'].includes(tool)) {
+        newElement.points = [drawStart, point];
+        newElement.nodes = [
+          { id: crypto.randomUUID(), x: drawStart.x, y: drawStart.y, type: 'vertex' },
+          { id: crypto.randomUUID(), x: point.x, y: point.y, type: 'vertex' },
+        ];
+      }
+
+      onAddElement(newElement);
+      setIsDrawing(false);
+      setDrawStart(null);
+      setDrawCurrent(null);
+    } else if (isMarquee && marqueeStart) {
+      // Complete marquee selection
+      const x1 = Math.min(marqueeStart.x, point.x);
+      const y1 = Math.min(marqueeStart.y, point.y);
+      const x2 = Math.max(marqueeStart.x, point.x);
+      const y2 = Math.max(marqueeStart.y, point.y);
+
+      // Find elements within marquee
+      const selected = elements.filter(el => {
+        const elX = el.x;
+        const elY = el.y;
+        const elW = el.width || 60;
+        const elH = el.height || 60;
+        return elX >= x1 && elY >= y1 && elX + elW <= x2 && elY + elH <= y2;
+      }).map(el => el.id);
+
+      if (selected.length > 0) {
+        onSelectElements(selected);
+      }
+
+      setIsMarquee(false);
+      setMarqueeStart(null);
+      setMarqueeEnd(null);
+    } else if (isDragging) {
+      setIsDragging(false);
+      setDragStart(null);
+      setDragOffsets(new Map());
+      setSnapGuides([]);
+    }
+  }, [isDrawing, drawStart, isMarquee, marqueeStart, isDragging, tool, getSVGPoint, elements, onAddElement, onSelectElements]);
+
+  // Element interaction
+  const handleElementMouseDown = useCallback((e: React.MouseEvent, element: DiagramElement) => {
+    e.stopPropagation();
+
+    if (tool === 'eraser') {
+      onDeleteElement(element.id);
+      return;
     }
 
-    onAddElement(newElement);
-    setStartPoint(null);
-    setCurrentPoint(null);
-  }, [isDrawing, startPoint, tool, getSVGPoint, onAddElement]);
-
-  const handleElementClick = useCallback((e: React.MouseEvent, element: DiagramElement) => {
-    e.stopPropagation();
     if (tool === 'select') {
+      const point = getSVGPoint(e);
+
+      // Select element
       if (e.shiftKey) {
-        // Multi-select
         if (selectedIds.includes(element.id)) {
           onSelectElements(selectedIds.filter(id => id !== element.id));
         } else {
           onSelectElements([...selectedIds, element.id]);
         }
-      } else {
+      } else if (!selectedIds.includes(element.id)) {
         onSelectElements([element.id]);
       }
-    } else if (tool === 'eraser') {
-      onDeleteElement(element.id);
-    }
-  }, [tool, onSelectElements, onDeleteElement, selectedIds]);
 
-  const handleElementDragStart = useCallback((e: React.MouseEvent, element: DiagramElement) => {
-    if (tool !== 'select') return;
-    e.stopPropagation();
-    const point = getSVGPoint(e);
-    
-    // If this element isn't in the selection, select it
-    let currentSelection = selectedIds;
-    if (!selectedIds.includes(element.id)) {
-      if (!e.shiftKey) {
-        currentSelection = [element.id];
-        onSelectElements([element.id]);
-      } else {
-        currentSelection = [...selectedIds, element.id];
-        onSelectElements(currentSelection);
-      }
-    }
-
-    const offsets = new Map<string, Point>();
-    currentSelection.forEach(id => {
-      const el = elements.find(e => e.id === id);
-      if (el) {
-        offsets.set(id, { x: point.x - el.x, y: point.y - el.y });
-      }
-    });
-    setDragOffset(offsets);
-  }, [tool, getSVGPoint, onSelectElements, selectedIds, elements]);
-
-  const handleElementDrag = useCallback((e: React.MouseEvent) => {
-    if (dragOffset.size === 0) return;
-    const point = getSVGPoint(e);
-    dragOffset.forEach((offset, id) => {
-      onUpdateElement(id, {
-        x: point.x - offset.x,
-        y: point.y - offset.y,
+      // Start dragging
+      setIsDragging(true);
+      setDragStart(point);
+      const offsets = new Map<string, Point>();
+      const idsToMove = selectedIds.includes(element.id) ? selectedIds : [element.id];
+      idsToMove.forEach(id => {
+        const el = elements.find(e => e.id === id);
+        if (el) offsets.set(id, { x: el.x, y: el.y });
       });
-    });
-  }, [dragOffset, getSVGPoint, onUpdateElement]);
+      setDragOffsets(offsets);
+    }
+  }, [tool, getSVGPoint, selectedIds, elements, onSelectElements, onDeleteElement]);
 
-  const handleElementDragEnd = useCallback(() => {
-    setDragOffset(new Map());
-  }, []);
-
-  const handleDoubleClick = useCallback((e: React.MouseEvent, element: DiagramElement) => {
+  const handleElementDoubleClick = useCallback((e: React.MouseEvent, element: DiagramElement) => {
     e.stopPropagation();
     if (element.type === 'latex') {
       setEditingLatex(element.id);
       setLatexInput(element.latex || '');
     } else if (element.type === 'text') {
       const newText = prompt('Enter text:', element.text || '');
-      if (newText !== null) {
-        onUpdateElement(element.id, { text: newText });
-      }
-    } else if (element.type === 'mass' || element.type === 'charge' || element.type === 'label_box') {
-      const newLabel = prompt('Enter label:', element.label || '');
-      if (newLabel !== null) {
-        onUpdateElement(element.id, { label: newLabel });
-      }
+      if (newText !== null) onUpdateElement(element.id, { text: newText });
     }
   }, [onUpdateElement]);
 
-  const handleLatexSubmit = useCallback(() => {
-    if (editingLatex) {
-      onUpdateElement(editingLatex, { latex: latexInput });
-      setEditingLatex(null);
-      setLatexInput('');
+  // Resize handler
+  const handleResize = useCallback((id: string, handle: string, point: Point, original: DiagramElement) => {
+    const x = original.x;
+    const y = original.y;
+    const w = original.width || 60;
+    const h = original.height || 60;
+
+    let newX = x, newY = y, newW = w, newH = h;
+
+    switch (handle) {
+      case 'nw': newX = point.x; newY = point.y; newW = x + w - point.x; newH = y + h - point.y; break;
+      case 'n': newY = point.y; newH = y + h - point.y; break;
+      case 'ne': newY = point.y; newW = point.x - x; newH = y + h - point.y; break;
+      case 'e': newW = point.x - x; break;
+      case 'se': newW = point.x - x; newH = point.y - y; break;
+      case 's': newH = point.y - y; break;
+      case 'sw': newX = point.x; newW = x + w - point.x; newH = point.y - y; break;
+      case 'w': newX = point.x; newW = x + w - point.x; break;
     }
-  }, [editingLatex, latexInput, onUpdateElement]);
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (selectedNodeId) {
-          // Delete selected node
-          const selectedElement = elements.find(el => el.nodes?.some(n => n.id === selectedNodeId));
-          if (selectedElement && selectedElement.nodes && selectedElement.nodes.length > 2) {
-            onDeleteNode(selectedElement.id, selectedNodeId);
-            setSelectedNodeId(null);
-          }
-        } else if (selectedIds.length > 0 && !(e.target instanceof HTMLInputElement)) {
-          selectedIds.forEach(id => onDeleteElement(id));
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedIds, selectedNodeId, onDeleteElement, onDeleteNode, elements]);
+    // Minimum size
+    const minSize = 20;
+    if (newW < minSize) { newW = minSize; if (handle.includes('w')) newX = x + w - minSize; }
+    if (newH < minSize) { newH = minSize; if (handle.includes('n')) newY = y + h - minSize; }
 
-  const renderPreview = () => {
-    if (!isDrawing || !startPoint || !currentPoint) return null;
+    onUpdateElement(id, { x: newX, y: newY, width: newW, height: newH });
+  }, [onUpdateElement]);
 
-    switch (tool) {
-      case 'line':
-      case 'arrow':
-      case 'wire':
-      case 'force':
-      case 'fieldline':
-      case 'ray':
-      case 'decay_arrow':
-      case 'dimension':
-      case 'optical_axis':
-        return (
-          <line
-            x1={startPoint.x} y1={startPoint.y}
-            x2={currentPoint.x} y2={currentPoint.y}
-            stroke="#3B82F6" strokeWidth={2} strokeDasharray="5,5" opacity={0.7}
-          />
-        );
-      case 'rectangle':
-      case 'mass':
-      case 'label_box':
-      case 'cylinder':
-        return (
-          <rect
-            x={Math.min(startPoint.x, currentPoint.x)} y={Math.min(startPoint.y, currentPoint.y)}
-            width={Math.abs(currentPoint.x - startPoint.x)} height={Math.abs(currentPoint.y - startPoint.y)}
-            stroke="#3B82F6" strokeWidth={2} strokeDasharray="5,5" fill="none" opacity={0.7}
-          />
-        );
-      case 'circle':
-      case 'pulley': {
-        const r = Math.sqrt(Math.pow(currentPoint.x - startPoint.x, 2) + Math.pow(currentPoint.y - startPoint.y, 2));
-        return (
-          <circle cx={startPoint.x} cy={startPoint.y} r={r}
-            stroke="#3B82F6" strokeWidth={2} strokeDasharray="5,5" fill="none" opacity={0.7} />
-        );
-      }
-      case 'ellipse': {
-        const rx = Math.abs(currentPoint.x - startPoint.x) / 2;
-        const ry = Math.abs(currentPoint.y - startPoint.y) / 2;
-        const cx = Math.min(startPoint.x, currentPoint.x) + rx;
-        const cy = Math.min(startPoint.y, currentPoint.y) + ry;
-        return (
-          <ellipse cx={cx} cy={cy} rx={rx} ry={ry}
-            stroke="#3B82F6" strokeWidth={2} strokeDasharray="5,5" fill="none" opacity={0.7} />
-        );
-      }
-      default:
-        return null;
+  const handleRotate = useCallback((id: string, angle: number) => {
+    onUpdateElement(id, { rotation: angle });
+  }, [onUpdateElement]);
+
+  // Render preview while drawing
+  const renderDrawPreview = () => {
+    if (!isDrawing || !drawStart || !drawCurrent) return null;
+
+    const isLine = ['line', 'arrow', 'wire', 'force', 'ray', 'decay_arrow', 'dimension', 'optical_axis', 'fieldline'].includes(tool);
+
+    if (isLine) {
+      return (
+        <line
+          x1={drawStart.x} y1={drawStart.y}
+          x2={drawCurrent.x} y2={drawCurrent.y}
+          stroke="#1a73e8" strokeWidth={2 / zoom}
+          strokeDasharray={`${5 / zoom},${5 / zoom}`}
+          opacity={0.7}
+        />
+      );
     }
+
+    const x = Math.min(drawStart.x, drawCurrent.x);
+    const y = Math.min(drawStart.y, drawCurrent.y);
+    const w = Math.abs(drawCurrent.x - drawStart.x);
+    const h = Math.abs(drawCurrent.y - drawStart.y);
+
+    if (tool === 'circle') {
+      const r = Math.sqrt(w * w + h * h) / 2;
+      return (
+        <circle
+          cx={drawStart.x + (drawCurrent.x - drawStart.x) / 2}
+          cy={drawStart.y + (drawCurrent.y - drawStart.y) / 2}
+          r={r}
+          stroke="#1a73e8" strokeWidth={2 / zoom}
+          strokeDasharray={`${5 / zoom},${5 / zoom}`}
+          fill="rgba(26, 115, 232, 0.1)"
+        />
+      );
+    }
+
+    return (
+      <rect
+        x={x} y={y} width={w} height={h}
+        stroke="#1a73e8" strokeWidth={2 / zoom}
+        strokeDasharray={`${5 / zoom},${5 / zoom}`}
+        fill="rgba(26, 115, 232, 0.1)"
+      />
+    );
+  };
+
+  // Render marquee
+  const renderMarquee = () => {
+    if (!isMarquee || !marqueeStart || !marqueeEnd) return null;
+    const x = Math.min(marqueeStart.x, marqueeEnd.x);
+    const y = Math.min(marqueeStart.y, marqueeEnd.y);
+    const w = Math.abs(marqueeEnd.x - marqueeStart.x);
+    const h = Math.abs(marqueeEnd.y - marqueeStart.y);
+
+    return (
+      <rect
+        x={x} y={y} width={w} height={h}
+        stroke="#1a73e8" strokeWidth={1 / zoom}
+        strokeDasharray={`${4 / zoom},${4 / zoom}`}
+        fill="rgba(26, 115, 232, 0.05)"
+      />
+    );
+  };
+
+  // Get cursor
+  const getCursor = () => {
+    if (tool === 'select') return isDragging ? 'grabbing' : 'default';
+    if (tool === 'eraser') return 'crosshair';
+    return 'crosshair';
   };
 
   return (
     <div className="relative w-full h-full overflow-hidden bg-white">
+      {/* Grid */}
       {showGrid && (
         <div className="absolute inset-0 opacity-20" style={{
           backgroundImage: 'radial-gradient(circle, #94a3b8 1px, transparent 1px)',
-          backgroundSize: `${20 * zoom}px ${20 * zoom}px`,
+          backgroundSize: `${GRID_SIZE * zoom}px ${GRID_SIZE * zoom}px`,
         }} />
       )}
 
@@ -340,66 +391,69 @@ const Canvas: React.FC<CanvasProps> = ({
         ref={svgRef}
         className="w-full h-full relative z-10"
         onMouseDown={handleMouseDown}
-        onMouseMove={(e) => { handleMouseMove(e); handleElementDrag(e); }}
-        onMouseUp={(e) => { handleMouseUp(e); handleElementDragEnd(); }}
-        onMouseLeave={() => { setIsDrawing(false); handleElementDragEnd(); }}
-        style={{ cursor: tool === 'select' ? 'default' : tool === 'eraser' ? 'crosshair' : 'crosshair' }}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={() => {
+          if (isDrawing) { setIsDrawing(false); setDrawStart(null); setDrawCurrent(null); }
+          if (isMarquee) { setIsMarquee(false); setMarqueeStart(null); setMarqueeEnd(null); }
+          if (isDragging) { setIsDragging(false); setDragStart(null); setDragOffsets(new Map()); setSnapGuides([]); }
+        }}
+        style={{ cursor: getCursor() }}
       >
         <g transform={`scale(${zoom})`}>
-          {/* Render all elements */}
+          {/* Render elements */}
           {elements.map(element => (
             <g key={element.id}>
               {element.type === 'latex' ? (
                 <foreignObject
                   x={element.x} y={element.y}
                   width={element.width || 200} height={element.height || 60}
-                  onMouseDown={(e) => handleElementDragStart(e, element)}
-                  onClick={(e) => handleElementClick(e, element)}
-                  onDoubleClick={(e) => handleDoubleClick(e, element)}
-                  style={{ cursor: tool === 'select' ? 'move' : 'default', overflow: 'visible' }}
+                  onMouseDown={(e) => handleElementMouseDown(e, element)}
+                  onDoubleClick={(e) => handleElementDoubleClick(e, element)}
+                  style={{ cursor: tool === 'select' ? (isDragging ? 'grabbing' : 'grab') : 'crosshair', overflow: 'visible' }}
                 >
                   <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <div
-                      dangerouslySetInnerHTML={{
-                        __html: katex.renderToString(element.latex || 'E=mc^2', { throwOnError: false, displayMode: false }),
-                      }}
-                    />
+                    <div dangerouslySetInnerHTML={{
+                      __html: katex.renderToString(element.latex || 'E=mc^2', { throwOnError: false, displayMode: false }),
+                    }} />
                   </div>
                 </foreignObject>
               ) : (
                 <ElementRenderer
                   element={element}
                   isSelected={selectedIds.includes(element.id)}
-                  onMouseDown={(e) => handleElementDragStart(e, element)}
-                  onClick={(e) => handleElementClick(e, element)}
-                  onDoubleClick={(e) => handleDoubleClick(e, element)}
+                  onMouseDown={(e) => handleElementMouseDown(e, element)}
+                  onClick={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => handleElementDoubleClick(e, element)}
                   tool={tool}
                 />
               )}
             </g>
           ))}
 
-          {/* Render nodes overlay for selected elements */}
-          {tool === 'select' && selectedIds.map(id => {
-            const element = elements.find(el => el.id === id);
-            if (!element) return null;
+          {/* Selection handles */}
+          {tool === 'select' && selectedIds.length === 1 && (() => {
+            const el = elements.find(e => e.id === selectedIds[0]);
+            if (!el) return null;
             return (
-              <NodesOverlay
-                key={`nodes-${id}`}
-                element={element}
+              <SelectionHandles
+                element={el}
                 zoom={zoom}
-                onUpdateNodes={onUpdateNodes}
-                onUpdatePoints={onUpdatePoints}
-                onUpdateElement={onUpdateElement}
-                selectedNodeId={selectedNodeId}
-                onSelectNode={setSelectedNodeId}
-                onDeleteNode={onDeleteNode}
-                onAddNode={onAddNode}
+                onResize={handleResize}
+                onRotate={handleRotate}
+                selectedNodeId={null}
               />
             );
-          })}
+          })()}
 
-          {renderPreview()}
+          {/* Snap guides */}
+          <SnapGuides guides={snapGuides} zoom={zoom} />
+
+          {/* Draw preview */}
+          {renderDrawPreview()}
+
+          {/* Marquee */}
+          {renderMarquee()}
         </g>
       </svg>
 
@@ -412,14 +466,14 @@ const Canvas: React.FC<CanvasProps> = ({
             onChange={(e) => setLatexInput(e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono"
             placeholder="E = mc^2" autoFocus
-            onKeyDown={(e) => { if (e.key === 'Enter') handleLatexSubmit(); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') { onUpdateElement(editingLatex, { latex: latexInput }); setEditingLatex(null); } }}
           />
           <div className="mt-3 p-3 bg-gray-50 rounded-md min-h-[40px] flex items-center justify-center">
             <div dangerouslySetInnerHTML={{ __html: katex.renderToString(latexInput || 'E=mc^2', { throwOnError: false }) }} />
           </div>
           <div className="mt-4 flex gap-2 justify-end">
             <button onClick={() => { setEditingLatex(null); setLatexInput(''); }} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-md">Cancel</button>
-            <button onClick={handleLatexSubmit} className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600">Apply</button>
+            <button onClick={() => { onUpdateElement(editingLatex, { latex: latexInput }); setEditingLatex(null); }} className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600">Apply</button>
           </div>
         </div>
       )}
