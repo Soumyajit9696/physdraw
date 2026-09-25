@@ -7,6 +7,7 @@ import FormatPanel from './components/FormatPanel';
 import ExportPanel from './components/ExportPanel';
 import LatexPanel from './components/LatexPanel';
 import TemplateGallery from './components/TemplateGallery';
+import ContextMenu from './components/ContextMenu';
 import 'katex/dist/katex.min.css';
 
 function App() {
@@ -20,6 +21,8 @@ function App() {
   const [history, setHistory] = useState<DiagramElement[][]>([[]]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const [showGrid, setShowGrid] = useState(true);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [clipboard, setClipboard] = useState<DiagramElement[]>([]);
 
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -159,6 +162,34 @@ function App() {
     setElements([...selected, ...rest]);
   }, [selectedIds, elements]);
 
+  // Copy/Paste
+  const copySelected = useCallback(() => {
+    const copied = elements.filter(el => selectedIds.includes(el.id));
+    setClipboard(copied);
+  }, [elements, selectedIds]);
+
+  const pasteFromClipboard = useCallback(() => {
+    if (clipboard.length === 0) return;
+    const newElements: DiagramElement[] = clipboard.map(el => ({
+      ...el,
+      id: crypto.randomUUID(),
+      x: el.x + 30,
+      y: el.y + 30,
+      nodes: el.nodes?.map(n => ({ ...n, id: crypto.randomUUID(), x: n.x + 30, y: n.y + 30 })),
+      points: el.points?.map(p => ({ x: p.x + 30, y: p.y + 30 })),
+    }));
+    const allNew = [...elements, ...newElements];
+    setElements(allNew);
+    pushHistory(allNew);
+    setSelectedIds(newElements.map(e => e.id));
+  }, [clipboard, elements, pushHistory]);
+
+  // Context menu
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY });
+  }, []);
+
   const insertLatex = useCallback((latex: string) => {
     const id = crypto.randomUUID();
     addElement({
@@ -277,6 +308,9 @@ function App() {
         if (e.key === 'a') { e.preventDefault(); setSelectedIds(elements.map(el => el.id)); }
         if (e.key === 's') { e.preventDefault(); saveDiagram(); }
         if (e.key === 'e') { e.preventDefault(); setShowExport(true); }
+        if (e.key === 'c') { e.preventDefault(); copySelected(); }
+        if (e.key === 'v') { e.preventDefault(); pasteFromClipboard(); }
+        if (e.key === 'x') { e.preventDefault(); copySelected(); selectedIds.forEach(id => deleteElement(id)); }
         return;
       }
       switch (e.key.toLowerCase()) {
@@ -301,7 +335,7 @@ function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, duplicateSelected, elements, sendToBack, bringToFront, selectedIds, deleteElement, saveDiagram]);
+  }, [undo, redo, duplicateSelected, elements, sendToBack, bringToFront, selectedIds, deleteElement, saveDiagram, copySelected, pasteFromClipboard]);
 
   // Wheel zoom
   useEffect(() => {
@@ -333,6 +367,8 @@ function App() {
         onExport={() => setShowExport(true)}
         onTemplates={() => setShowTemplates(true)}
         onFormulas={() => setShowLatexPanel(true)}
+        onDelete={() => selectedIds.forEach(id => deleteElement(id))}
+        onDuplicate={duplicateSelected}
         zoom={zoom}
         onZoomIn={() => setZoom(z => Math.min(z + 0.1, 3))}
         onZoomOut={() => setZoom(z => Math.max(z - 0.1, 0.3))}
@@ -341,6 +377,7 @@ function App() {
         onToggleGrid={() => setShowGrid(!showGrid)}
         canUndo={historyIndex > 0}
         canRedo={historyIndex < history.length - 1}
+        hasSelection={selectedIds.length > 0}
       />
 
       {/* Main Content */}
@@ -358,6 +395,7 @@ function App() {
           className="flex-1 relative overflow-hidden bg-gray-50"
           onDrop={handleDrop}
           onDragOver={handleDragOver}
+          onContextMenu={handleContextMenu}
         >
           {/* Canvas info */}
           <div className="absolute top-2 left-2 z-20 flex items-center gap-2">
@@ -443,6 +481,23 @@ function App() {
       />
       <LatexPanel isOpen={showLatexPanel} onClose={() => setShowLatexPanel(false)} onInsert={insertLatex} />
       <TemplateGallery isOpen={showTemplates} onClose={() => setShowTemplates(false)} onLoadTemplate={loadTemplate} />
+      
+      {/* Context Menu */}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          onCut={() => { copySelected(); selectedIds.forEach(id => deleteElement(id)); }}
+          onCopy={copySelected}
+          onPaste={pasteFromClipboard}
+          onDuplicate={duplicateSelected}
+          onDelete={() => selectedIds.forEach(id => deleteElement(id))}
+          onBringToFront={bringToFront}
+          onSendToBack={sendToBack}
+          hasSelection={selectedIds.length > 0}
+        />
+      )}
     </div>
   );
 }

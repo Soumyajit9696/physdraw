@@ -40,7 +40,12 @@ const ElementRenderer: React.FC<ElementRendererProps> = ({
       case 'optical_axis': {
         const p = element.points || [{ x: element.x, y: element.y }, { x: element.x + (element.width || 100), y: element.y }];
         return (
-          <line x1={p[0].x} y1={p[0].y} x2={p[1].x} y2={p[1].y} {...commonProps} />
+          <g {...commonProps}>
+            {/* Invisible wider hit area */}
+            <line x1={p[0].x} y1={p[0].y} x2={p[1].x} y2={p[1].y} stroke="transparent" strokeWidth={10} />
+            {/* Visible line */}
+            <line x1={p[0].x} y1={p[0].y} x2={p[1].x} y2={p[1].y} stroke={strokeColor} strokeWidth={element.strokeWidth} fill="none" pointerEvents="none" />
+          </g>
         );
       }
 
@@ -55,13 +60,17 @@ const ElementRenderer: React.FC<ElementRendererProps> = ({
         const dashed = element.type === 'decay_arrow' ? '5,3' : undefined;
         return (
           <g {...commonProps}>
-            <line x1={x1} y1={y1} x2={x2} y2={y2} strokeDasharray={dashed} />
+            {/* Invisible wider hit area */}
+            <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="transparent" strokeWidth={12} />
+            {/* Visible line */}
+            <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={strokeColor} strokeWidth={element.strokeWidth} strokeDasharray={dashed} pointerEvents="none" />
             <polygon
               points={`${x2},${y2} ${x2 - headLen * Math.cos(angle - Math.PI / 6)},${y2 - headLen * Math.sin(angle - Math.PI / 6)} ${x2 - headLen * Math.cos(angle + Math.PI / 6)},${y2 - headLen * Math.sin(angle + Math.PI / 6)}`}
               fill={strokeColor}
+              pointerEvents="none"
             />
             {element.label && (
-              <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 10} textAnchor="middle" fill={strokeColor} fontSize="12" stroke="none">
+              <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 10} textAnchor="middle" fill={strokeColor} fontSize="12" stroke="none" pointerEvents="none">
                 {element.label}
               </text>
             )}
