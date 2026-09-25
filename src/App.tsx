@@ -3,10 +3,13 @@ import { DiagramElement, Tool, Point, NodePoint } from './types';
 import Canvas from './components/Canvas';
 import Toolbar from './components/Toolbar';
 import PropertiesPanel from './components/PropertiesPanel';
+import StyleEditor from './components/StyleEditor';
 import ExportPanel from './components/ExportPanel';
 import LatexPanel from './components/LatexPanel';
 import TemplateGallery from './components/TemplateGallery';
 import 'katex/dist/katex.min.css';
+
+type AppMode = 'draw' | 'edit';
 
 function App() {
   const [elements, setElements] = useState<DiagramElement[]>([]);
@@ -19,6 +22,7 @@ function App() {
   const [history, setHistory] = useState<DiagramElement[][]>([[]]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const [showGrid, setShowGrid] = useState(true);
+  const [appMode, setAppMode] = useState<AppMode>('draw');
 
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -43,6 +47,13 @@ function App() {
 
   const updateElementWithHistory = useCallback((id: string, updates: Partial<DiagramElement>) => {
     const newElements = elements.map(el => el.id === id ? { ...el, ...updates } : el);
+    setElements(newElements);
+    pushHistory(newElements);
+  }, [elements, pushHistory]);
+
+  // Batch update multiple elements (for style editor)
+  const updateMultipleElements = useCallback((ids: string[], updates: Partial<DiagramElement>) => {
+    const newElements = elements.map(el => ids.includes(el.id) ? { ...el, ...updates } : el);
     setElements(newElements);
     pushHistory(newElements);
   }, [elements, pushHistory]);
@@ -278,7 +289,29 @@ function App() {
             <h1 className="text-white font-bold text-sm tracking-wide">PhysicsDraw</h1>
           </div>
           <div className="h-5 w-px bg-gray-600" />
-          <span className="text-gray-400 text-xs hidden md:inline">Online Physics Diagram Editor</span>
+          {/* Mode Toggle */}
+          <div className="flex items-center bg-gray-800 rounded-lg p-0.5">
+            <button
+              onClick={() => { setAppMode('draw'); setCurrentTool('select'); }}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
+                appMode === 'draw'
+                  ? 'bg-blue-500 text-white shadow'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              ✏️ Draw
+            </button>
+            <button
+              onClick={() => { setAppMode('edit'); setCurrentTool('select'); }}
+              className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
+                appMode === 'edit'
+                  ? 'bg-purple-500 text-white shadow'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              🎨 Edit Styles
+            </button>
+          </div>
         </div>
 
         {/* Center Actions */}
@@ -312,18 +345,46 @@ function App() {
 
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
-        <Toolbar currentTool={currentTool} onToolChange={setCurrentTool} />
+        {/* Left sidebar - only in draw mode */}
+        {appMode === 'draw' && (
+          <Toolbar currentTool={currentTool} onToolChange={setCurrentTool} />
+        )}
+        {/* Edit mode indicator */}
+        {appMode === 'edit' && (
+          <div className="w-14 bg-gradient-to-b from-purple-900 to-purple-800 flex flex-col items-center py-3 gap-2 border-r border-purple-700">
+            <div className="w-10 h-10 rounded-lg bg-purple-600 flex items-center justify-center text-white text-lg shadow-lg">
+              🎨
+            </div>
+            <span className="text-purple-200 text-[10px] font-medium text-center leading-tight">Edit<br/>Mode</span>
+            <div className="flex-1" />
+            <button
+              onClick={() => setAppMode('draw')}
+              className="w-10 h-9 rounded-lg bg-purple-700 hover:bg-purple-600 text-white text-xs flex items-center justify-center transition-colors"
+              title="Switch to Draw mode"
+            >
+              ✏️
+            </button>
+          </div>
+        )}
 
         <div ref={canvasContainerRef} className="flex-1 relative overflow-hidden">
           {/* Canvas info bar */}
           <div className="absolute top-2 left-2 z-20 flex items-center gap-2">
             <div className="bg-white/90 backdrop-blur-sm rounded-lg shadow-sm px-3 py-1.5 text-xs text-gray-600 border border-gray-200">
-              Tool: <span className="font-semibold text-gray-800 capitalize">{currentTool}</span>
+              {appMode === 'draw' ? (
+                <>Tool: <span className="font-semibold text-gray-800 capitalize">{currentTool}</span></>
+              ) : (
+                <span className="text-purple-600 font-semibold">🎨 Edit Mode</span>
+              )}
               <span className="mx-2">|</span>
               Elements: <span className="font-semibold text-gray-800">{elements.length}</span>
-              {selectedIds.length > 0 && <><span className="mx-2">|</span>Selected: <span className="font-semibold text-blue-600">{selectedIds.length}</span></>}
+              {selectedIds.length > 0 && <><span className="mx-2">|</span>Selected: <span className={`font-semibold ${appMode === 'edit' ? 'text-purple-600' : 'text-blue-600'}`}>{selectedIds.length}</span></>}
             </div>
-            {selectedIds.length > 0 && (
+            {appMode === 'edit' ? (
+              <div className="bg-purple-50 rounded-lg shadow-sm px-3 py-1.5 text-xs text-purple-700 border border-purple-200">
+                🎨 <b>Edit Mode:</b> Click elements to select • Shift+click for multi-select • Use the Style panel on the right to edit colors, strokes, and more
+              </div>
+            ) : selectedIds.length > 0 && (
               <div className="bg-blue-50 rounded-lg shadow-sm px-3 py-1.5 text-xs text-blue-700 border border-blue-200">
                 💡 Drag nodes to reshape • Right-click node to delete • Click + on edge to add node • Double-click node to label
               </div>
@@ -351,7 +412,7 @@ function App() {
           <Canvas
             elements={elements}
             selectedIds={selectedIds}
-            tool={currentTool}
+            tool={appMode === 'edit' ? 'select' : currentTool}
             onAddElement={addElement}
             onUpdateElement={updateElement}
             onSelectElements={setSelectedIds}
@@ -366,12 +427,27 @@ function App() {
           />
         </div>
 
-        <PropertiesPanel
-          element={selectedElement}
-          selectedIds={selectedIds}
-          onUpdate={updateElementWithHistory}
-          onDelete={deleteElement}
-        />
+        {/* Right panel - StyleEditor in edit mode, PropertiesPanel in draw mode */}
+        {appMode === 'edit' ? (
+          <StyleEditor
+            elements={elements}
+            selectedIds={selectedIds}
+            onUpdate={updateMultipleElements}
+            onDelete={deleteElement}
+            onSelectAll={() => setSelectedIds(elements.map(el => el.id))}
+            onDeselectAll={() => setSelectedIds([])}
+            onSelectById={(id) => {
+              setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+            }}
+          />
+        ) : (
+          <PropertiesPanel
+            element={selectedElement}
+            selectedIds={selectedIds}
+            onUpdate={updateElementWithHistory}
+            onDelete={deleteElement}
+          />
+        )}
       </div>
 
       {/* Bottom Status Bar */}
@@ -379,14 +455,28 @@ function App() {
         <div className="flex items-center gap-4">
           <span>PhysicsDraw v2.0</span>
           <span>•</span>
+          <span className={appMode === 'edit' ? 'text-purple-300' : 'text-blue-300'}>
+            {appMode === 'draw' ? '✏️ Draw Mode' : '🎨 Edit Mode'}
+          </span>
+          <span>•</span>
           <span>Zoom: {Math.round(zoom * 100)}%</span>
           <span>•</span>
           <span>Grid: {showGrid ? 'On' : 'Off'}</span>
         </div>
         <div className="flex items-center gap-4">
-          <span>V=Select L=Line A=Arrow R=Rect C=Circle T=Text X=LaTeX W=Wire P=Poly E=Eraser</span>
-          <span>•</span>
-          <span>Ctrl+Z=Undo Ctrl+A=SelectAll Ctrl+D=Dup [=Back ]=Front</span>
+          {appMode === 'draw' ? (
+            <>
+              <span>V=Select L=Line A=Arrow R=Rect C=Circle T=Text X=LaTeX W=Wire P=Poly E=Eraser</span>
+              <span>•</span>
+              <span>Ctrl+Z=Undo Ctrl+A=SelectAll Ctrl+D=Dup</span>
+            </>
+          ) : (
+            <>
+              <span>Click to select • Shift+click for multi-select • Edit styles in the right panel</span>
+              <span>•</span>
+              <span>Ctrl+A=SelectAll Ctrl+Z=Undo</span>
+            </>
+          )}
         </div>
       </footer>
 
