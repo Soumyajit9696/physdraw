@@ -14,7 +14,10 @@ interface CanvasProps {
   onSelectElements: (ids: string[]) => void;
   onDeleteElement: (id: string) => void;
   zoom: number;
+  panOffset: Point;
+  onPan: (offset: Point) => void;
   showGrid?: boolean;
+  snapToGrid?: boolean;
   svgRef?: React.RefObject<SVGSVGElement>;
   onUpdateNodes: (id: string, nodes: NodePoint[]) => void;
   onUpdatePoints: (id: string, points: Point[]) => void;
@@ -27,8 +30,8 @@ const SNAP_THRESHOLD = 5;
 
 const Canvas: React.FC<CanvasProps> = ({
   elements, selectedIds, tool, onAddElement, onUpdateElement,
-  onSelectElements, onDeleteElement, zoom, showGrid = true,
-  svgRef: externalSvgRef, onUpdateNodes, onUpdatePoints, onDeleteNode, onAddNode,
+  onSelectElements, onDeleteElement, zoom, panOffset, onPan, showGrid = true,
+  snapToGrid = true, svgRef: externalSvgRef, onUpdateNodes, onUpdatePoints, onDeleteNode, onAddNode,
 }) => {
   const internalSvgRef = useRef<SVGSVGElement>(null);
   const svgRef = externalSvgRef || internalSvgRef;
@@ -53,21 +56,29 @@ const Canvas: React.FC<CanvasProps> = ({
   const [editingLatex, setEditingLatex] = useState<string | null>(null);
   const [latexInput, setLatexInput] = useState('');
 
+  // Pan state
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState<Point | null>(null);
+
   const getSVGPoint = useCallback((e: React.MouseEvent | MouseEvent): Point => {
     const svg = svgRef.current;
     if (!svg) return { x: 0, y: 0 };
     const rect = svg.getBoundingClientRect();
     return {
-      x: (e.clientX - rect.left) / zoom,
-      y: (e.clientY - rect.top) / zoom,
+      x: (e.clientX - rect.left - panOffset.x) / zoom,
+      y: (e.clientY - rect.top - panOffset.y) / zoom,
     };
-  }, [zoom, svgRef]);
+  }, [zoom, panOffset, svgRef]);
 
   // Snap to grid and other elements
   const snapPoint = useCallback((point: Point): { point: Point; guides: typeof snapGuides } => {
     const guides: typeof snapGuides = [];
     let snappedX = point.x;
     let snappedY = point.y;
+
+    if (!snapToGrid) {
+      return { point: { x: snappedX, y: snappedY }, guides: [] };
+    }
 
     // Snap to grid
     const gridX = Math.round(point.x / GRID_SIZE) * GRID_SIZE;
@@ -111,6 +122,13 @@ const Canvas: React.FC<CanvasProps> = ({
 
   // Canvas background mouse handlers
   const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
+    // Middle mouse button or Space+click for panning
+    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+      setIsPanning(true);
+      setPanStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
+      return;
+    }
+    
     if (e.button !== 0) return;
     const point = getSVGPoint(e);
 
@@ -136,9 +154,15 @@ const Canvas: React.FC<CanvasProps> = ({
       };
       setDrawPreview({ start: point, current: point });
     }
-  }, [tool, getSVGPoint, onSelectElements]);
+  }, [tool, getSVGPoint, onSelectElements, panOffset]);
 
   const handleCanvasMouseMove = useCallback((e: React.MouseEvent) => {
+    // Handle panning
+    if (isPanning && panStart) {
+      onPan({ x: e.clientX - panStart.x, y: e.clientY - panStart.y });
+      return;
+    }
+
     const point = getSVGPoint(e);
     const interaction = interactionRef.current;
 
@@ -166,6 +190,13 @@ const Canvas: React.FC<CanvasProps> = ({
   }, [getSVGPoint, snapPoint, onUpdateElement]);
 
   const handleCanvasMouseUp = useCallback((e: React.MouseEvent) => {
+    // Stop panning
+    if (isPanning) {
+      setIsPanning(false);
+      setPanStart(null);
+      return;
+    }
+
     const point = getSVGPoint(e);
     const interaction = interactionRef.current;
 
@@ -362,6 +393,7 @@ const Canvas: React.FC<CanvasProps> = ({
   };
 
   const getCursor = () => {
+    if (isPanning) return 'grabbing';
     if (tool === 'select') return interactionRef.current.mode === 'dragging' ? 'grabbing' : 'default';
     if (tool === 'eraser') return 'crosshair';
     return 'crosshair';
@@ -373,6 +405,7 @@ const Canvas: React.FC<CanvasProps> = ({
         <div className="absolute inset-0 opacity-20" style={{
           backgroundImage: 'radial-gradient(circle, #94a3b8 1px, transparent 1px)',
           backgroundSize: `${GRID_SIZE * zoom}px ${GRID_SIZE * zoom}px`,
+          backgroundPosition: `${panOffset.x}px ${panOffset.y}px`,
         }} />
       )}
 
@@ -390,7 +423,7 @@ const Canvas: React.FC<CanvasProps> = ({
         }}
         style={{ cursor: getCursor() }}
       >
-        <g transform={`scale(${zoom})`}>
+        <g transform={`translate(${panOffset.x}, ${panOffset.y}) scale(${zoom})`}>
           {/* Render elements */}
           {elements.map(element => (
             <g key={element.id}>

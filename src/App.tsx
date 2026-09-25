@@ -15,12 +15,15 @@ function App() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [currentTool, setCurrentTool] = useState<Tool>('select');
   const [zoom, setZoom] = useState(1);
+  const [panOffset, setPanOffset] = useState<Point>({ x: 0, y: 0 });
   const [showExport, setShowExport] = useState(false);
   const [showLatexPanel, setShowLatexPanel] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [history, setHistory] = useState<DiagramElement[][]>([[]]);
   const [historyIndex, setHistoryIndex] = useState(0);
   const [showGrid, setShowGrid] = useState(true);
+  const [showRulers, setShowRulers] = useState(false);
+  const [snapToGrid, setSnapToGrid] = useState(true);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [clipboard, setClipboard] = useState<DiagramElement[]>([]);
 
@@ -162,7 +165,6 @@ function App() {
     setElements([...selected, ...rest]);
   }, [selectedIds, elements]);
 
-  // Copy/Paste
   const copySelected = useCallback(() => {
     const copied = elements.filter(el => selectedIds.includes(el.id));
     setClipboard(copied);
@@ -184,11 +186,109 @@ function App() {
     setSelectedIds(newElements.map(e => e.id));
   }, [clipboard, elements, pushHistory]);
 
-  // Context menu
-  const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    setContextMenu({ x: e.clientX, y: e.clientY });
-  }, []);
+  // Alignment functions
+  const alignLeft = useCallback(() => {
+    if (selectedIds.length < 2) return;
+    const selected = elements.filter(el => selectedIds.includes(el.id));
+    const minX = Math.min(...selected.map(el => el.x));
+    const newElements = elements.map(el => selectedIds.includes(el.id) ? { ...el, x: minX } : el);
+    setElements(newElements);
+    pushHistory(newElements);
+  }, [selectedIds, elements, pushHistory]);
+
+  const alignCenter = useCallback(() => {
+    if (selectedIds.length < 2) return;
+    const selected = elements.filter(el => selectedIds.includes(el.id));
+    const centers = selected.map(el => el.x + (el.width || 60) / 2);
+    const avgCenter = centers.reduce((a, b) => a + b, 0) / centers.length;
+    const newElements = elements.map(el => {
+      if (!selectedIds.includes(el.id)) return el;
+      const w = el.width || 60;
+      return { ...el, x: avgCenter - w / 2 };
+    });
+    setElements(newElements);
+    pushHistory(newElements);
+  }, [selectedIds, elements, pushHistory]);
+
+  const alignRight = useCallback(() => {
+    if (selectedIds.length < 2) return;
+    const selected = elements.filter(el => selectedIds.includes(el.id));
+    const maxX = Math.max(...selected.map(el => el.x + (el.width || 60)));
+    const newElements = elements.map(el => {
+      if (!selectedIds.includes(el.id)) return el;
+      const w = el.width || 60;
+      return { ...el, x: maxX - w };
+    });
+    setElements(newElements);
+    pushHistory(newElements);
+  }, [selectedIds, elements, pushHistory]);
+
+  const alignTop = useCallback(() => {
+    if (selectedIds.length < 2) return;
+    const selected = elements.filter(el => selectedIds.includes(el.id));
+    const minY = Math.min(...selected.map(el => el.y));
+    const newElements = elements.map(el => selectedIds.includes(el.id) ? { ...el, y: minY } : el);
+    setElements(newElements);
+    pushHistory(newElements);
+  }, [selectedIds, elements, pushHistory]);
+
+  const alignMiddle = useCallback(() => {
+    if (selectedIds.length < 2) return;
+    const selected = elements.filter(el => selectedIds.includes(el.id));
+    const middles = selected.map(el => el.y + (el.height || 60) / 2);
+    const avgMiddle = middles.reduce((a, b) => a + b, 0) / middles.length;
+    const newElements = elements.map(el => {
+      if (!selectedIds.includes(el.id)) return el;
+      const h = el.height || 60;
+      return { ...el, y: avgMiddle - h / 2 };
+    });
+    setElements(newElements);
+    pushHistory(newElements);
+  }, [selectedIds, elements, pushHistory]);
+
+  const alignBottom = useCallback(() => {
+    if (selectedIds.length < 2) return;
+    const selected = elements.filter(el => selectedIds.includes(el.id));
+    const maxY = Math.max(...selected.map(el => el.y + (el.height || 60)));
+    const newElements = elements.map(el => {
+      if (!selectedIds.includes(el.id)) return el;
+      const h = el.height || 60;
+      return { ...el, y: maxY - h };
+    });
+    setElements(newElements);
+    pushHistory(newElements);
+  }, [selectedIds, elements, pushHistory]);
+
+  // Group/Ungroup
+  const groupSelected = useCallback(() => {
+    if (selectedIds.length < 2) return;
+    const groupId = crypto.randomUUID();
+    const newElements = elements.map(el => selectedIds.includes(el.id) ? { ...el, groupId } : el);
+    setElements(newElements);
+    pushHistory(newElements);
+  }, [selectedIds, elements, pushHistory]);
+
+  const ungroupSelected = useCallback(() => {
+    if (selectedIds.length === 0) return;
+    const newElements = elements.map(el => selectedIds.includes(el.id) ? { ...el, groupId: undefined } : el);
+    setElements(newElements);
+    pushHistory(newElements);
+  }, [selectedIds, elements, pushHistory]);
+
+  // Lock/Unlock
+  const lockSelected = useCallback(() => {
+    if (selectedIds.length === 0) return;
+    const newElements = elements.map(el => selectedIds.includes(el.id) ? { ...el, locked: true } : el);
+    setElements(newElements);
+    pushHistory(newElements);
+  }, [selectedIds, elements, pushHistory]);
+
+  const unlockSelected = useCallback(() => {
+    if (selectedIds.length === 0) return;
+    const newElements = elements.map(el => selectedIds.includes(el.id) ? { ...el, locked: false } : el);
+    setElements(newElements);
+    pushHistory(newElements);
+  }, [selectedIds, elements, pushHistory]);
 
   const insertLatex = useCallback((latex: string) => {
     const id = crypto.randomUUID();
@@ -224,18 +324,11 @@ function App() {
     } else { alert('No saved diagram found.'); }
   }, [pushHistory]);
 
-  // Auto-load on mount
-  useEffect(() => {
-    const saved = localStorage.getItem('physicsdraw-diagram');
-    if (saved) {
-      try {
-        const loaded = JSON.parse(saved) as DiagramElement[];
-        if (loaded.length > 0) { setElements(loaded); setHistory([loaded]); }
-      } catch { /* ignore */ }
-    }
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY });
   }, []);
 
-  // Handle drop from shape library
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     const tool = e.dataTransfer.getData('tool') as Tool;
@@ -244,8 +337,8 @@ function App() {
     const container = canvasContainerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
-    const x = (e.clientX - rect.left) / zoom;
-    const y = (e.clientY - rect.top) / zoom;
+    const x = (e.clientX - rect.left - panOffset.x) / zoom;
+    const y = (e.clientY - rect.top - panOffset.y) / zoom;
 
     const id = crypto.randomUUID();
     const defaultSizes: Record<string, { w: number; h: number }> = {
@@ -290,7 +383,7 @@ function App() {
 
     addElement(newElement);
     setCurrentTool('select');
-  }, [zoom, addElement]);
+  }, [zoom, panOffset, addElement]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -301,6 +394,7 @@ function App() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      
       if (e.ctrlKey || e.metaKey) {
         if (e.key === 'z') { e.preventDefault(); undo(); }
         if (e.key === 'y') { e.preventDefault(); redo(); }
@@ -311,8 +405,12 @@ function App() {
         if (e.key === 'c') { e.preventDefault(); copySelected(); }
         if (e.key === 'v') { e.preventDefault(); pasteFromClipboard(); }
         if (e.key === 'x') { e.preventDefault(); copySelected(); selectedIds.forEach(id => deleteElement(id)); }
+        if (e.key === 'g') { e.preventDefault(); groupSelected(); }
+        if (e.key === 'u') { e.preventDefault(); ungroupSelected(); }
+        if (e.key === 'l') { e.preventDefault(); lockSelected(); }
         return;
       }
+      
       switch (e.key.toLowerCase()) {
         case 'v': setCurrentTool('select'); break;
         case 'l': setCurrentTool('line'); break;
@@ -328,34 +426,29 @@ function App() {
           break;
         case '=': case '+': setZoom(z => Math.min(z + 0.1, 3)); break;
         case '-': setZoom(z => Math.max(z - 0.1, 0.3)); break;
-        case '0': setZoom(1); break;
+        case '0': setZoom(1); setPanOffset({ x: 0, y: 0 }); break;
         case '[': sendToBack(); break;
         case ']': bringToFront(); break;
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, duplicateSelected, elements, sendToBack, bringToFront, selectedIds, deleteElement, saveDiagram, copySelected, pasteFromClipboard]);
+  }, [undo, redo, duplicateSelected, elements, sendToBack, bringToFront, selectedIds, deleteElement, saveDiagram, copySelected, pasteFromClipboard, groupSelected, ungroupSelected, lockSelected]);
 
-  // Wheel zoom
   useEffect(() => {
-    const container = canvasContainerRef.current;
-    if (!container) return;
-    const handleWheel = (e: WheelEvent) => {
-      if (e.ctrlKey) {
-        e.preventDefault();
-        setZoom(z => Math.min(Math.max(z + (e.deltaY > 0 ? -0.1 : 0.1), 0.3), 3));
-      }
-    };
-    container.addEventListener('wheel', handleWheel, { passive: false });
-    return () => container.removeEventListener('wheel', handleWheel);
+    const saved = localStorage.getItem('physicsdraw-diagram');
+    if (saved) {
+      try {
+        const loaded = JSON.parse(saved) as DiagramElement[];
+        if (loaded.length > 0) { setElements(loaded); setHistory([loaded]); }
+      } catch { /* ignore */ }
+    }
   }, []);
 
   const selectedElement = selectedIds.length === 1 ? elements.find(el => el.id === selectedIds[0]) || null : null;
 
   return (
     <div className="h-screen w-screen flex flex-col bg-gray-100 overflow-hidden">
-      {/* Top Bar */}
       <TopBar
         currentTool={currentTool}
         onToolChange={setCurrentTool}
@@ -369,27 +462,41 @@ function App() {
         onFormulas={() => setShowLatexPanel(true)}
         onDelete={() => selectedIds.forEach(id => deleteElement(id))}
         onDuplicate={duplicateSelected}
+        onCopy={copySelected}
+        onPaste={pasteFromClipboard}
+        onCut={() => { copySelected(); selectedIds.forEach(id => deleteElement(id)); }}
+        onGroup={groupSelected}
+        onUngroup={ungroupSelected}
+        onLock={lockSelected}
+        onUnlock={unlockSelected}
+        onAlignLeft={alignLeft}
+        onAlignCenter={alignCenter}
+        onAlignRight={alignRight}
+        onAlignTop={alignTop}
+        onAlignMiddle={alignMiddle}
+        onAlignBottom={alignBottom}
         zoom={zoom}
         onZoomIn={() => setZoom(z => Math.min(z + 0.1, 3))}
         onZoomOut={() => setZoom(z => Math.max(z - 0.1, 0.3))}
-        onZoomReset={() => setZoom(1)}
+        onZoomReset={() => { setZoom(1); setPanOffset({ x: 0, y: 0 }); }}
         showGrid={showGrid}
         onToggleGrid={() => setShowGrid(!showGrid)}
+        showRulers={showRulers}
+        onToggleRulers={() => setShowRulers(!showRulers)}
+        snapToGrid={snapToGrid}
+        onToggleSnap={() => setSnapToGrid(!snapToGrid)}
         canUndo={historyIndex > 0}
         canRedo={historyIndex < history.length - 1}
         hasSelection={selectedIds.length > 0}
       />
 
-      {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left: Shape Library */}
         <ShapeLibrary
           currentTool={currentTool}
           onToolChange={setCurrentTool}
           onDragStart={() => {}}
         />
 
-        {/* Center: Canvas */}
         <div
           ref={canvasContainerRef}
           className="flex-1 relative overflow-hidden bg-gray-50"
@@ -397,7 +504,6 @@ function App() {
           onDragOver={handleDragOver}
           onContextMenu={handleContextMenu}
         >
-          {/* Canvas info */}
           <div className="absolute top-2 left-2 z-20 flex items-center gap-2">
             <div className="bg-white/95 backdrop-blur-sm rounded shadow-sm px-2.5 py-1 text-[10px] text-gray-500 border border-gray-200">
               <span className="font-medium text-gray-700">{elements.length}</span> elements
@@ -405,7 +511,6 @@ function App() {
             </div>
           </div>
 
-          {/* Empty state */}
           {elements.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none">
               <div className="text-center max-w-md">
@@ -434,7 +539,10 @@ function App() {
             onSelectElements={setSelectedIds}
             onDeleteElement={deleteElement}
             zoom={zoom}
+            panOffset={panOffset}
+            onPan={setPanOffset}
             showGrid={showGrid}
+            snapToGrid={snapToGrid}
             svgRef={svgRef}
             onUpdateNodes={updateNodes}
             onUpdatePoints={updatePoints}
@@ -443,7 +551,6 @@ function App() {
           />
         </div>
 
-        {/* Right: Format Panel */}
         <FormatPanel
           element={selectedElement}
           selectedIds={selectedIds}
@@ -456,7 +563,6 @@ function App() {
         />
       </div>
 
-      {/* Bottom Status Bar */}
       <footer className="h-6 bg-white border-t border-gray-200 flex items-center justify-between px-3 text-[10px] text-gray-500 shrink-0">
         <div className="flex items-center gap-3">
           <span>PhysicsDraw v3.0</span>
@@ -464,15 +570,16 @@ function App() {
           <span>{Math.round(zoom * 100)}%</span>
           <span className="text-gray-300">|</span>
           <span>{showGrid ? 'Grid On' : 'Grid Off'}</span>
+          <span className="text-gray-300">|</span>
+          <span>{snapToGrid ? 'Snap On' : 'Snap Off'}</span>
         </div>
         <div className="flex items-center gap-3">
           <span>V=Select · L=Line · A=Arrow · R=Rect · C=Circle · T=Text · W=Wire · E=Eraser</span>
           <span className="text-gray-300">|</span>
-          <span>Ctrl+Z=Undo · Ctrl+Y=Redo · Del=Delete · Ctrl+D=Duplicate</span>
+          <span>Ctrl+Z=Undo · Ctrl+Y=Redo · Del=Delete · Ctrl+D=Dup · Ctrl+G=Group · Ctrl+L=Lock</span>
         </div>
       </footer>
 
-      {/* Modals */}
       <ExportPanel
         isOpen={showExport}
         onClose={() => setShowExport(false)}
@@ -482,7 +589,6 @@ function App() {
       <LatexPanel isOpen={showLatexPanel} onClose={() => setShowLatexPanel(false)} onInsert={insertLatex} />
       <TemplateGallery isOpen={showTemplates} onClose={() => setShowTemplates(false)} onLoadTemplate={loadTemplate} />
       
-      {/* Context Menu */}
       {contextMenu && (
         <ContextMenu
           x={contextMenu.x}
