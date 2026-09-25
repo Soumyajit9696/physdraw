@@ -2,7 +2,6 @@ import React, { useRef, useState, useCallback, useEffect } from 'react';
 import { DiagramElement, Tool, Point, NodePoint } from '../types';
 import katex from 'katex';
 import ElementRenderer from './ElementRenderer';
-import NodesOverlay from './NodesOverlay';
 import SelectionHandles from './SelectionHandles';
 import SnapGuides from './SnapGuides';
 
@@ -34,25 +33,23 @@ const Canvas: React.FC<CanvasProps> = ({
   const internalSvgRef = useRef<SVGSVGElement>(null);
   const svgRef = externalSvgRef || internalSvgRef;
 
-  // Drawing state
-  const [isDrawing, setIsDrawing] = useState(false);
-  const [drawStart, setDrawStart] = useState<Point | null>(null);
-  const [drawCurrent, setDrawCurrent] = useState<Point | null>(null);
+  // Use refs for interaction state to avoid stale closures
+  const interactionRef = useRef<{
+    mode: 'idle' | 'drawing' | 'dragging' | 'marquee';
+    startPoint: Point | null;
+    currentPoint: Point | null;
+    dragOffsets: Map<string, Point>;
+  }>({
+    mode: 'idle',
+    startPoint: null,
+    currentPoint: null,
+    dragOffsets: new Map(),
+  });
 
-  // Selection/moving state
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState<Point | null>(null);
-  const [dragOffsets, setDragOffsets] = useState<Map<string, Point>>(new Map());
-
-  // Marquee selection
-  const [isMarquee, setIsMarquee] = useState(false);
-  const [marqueeStart, setMarqueeStart] = useState<Point | null>(null);
-  const [marqueeEnd, setMarqueeEnd] = useState<Point | null>(null);
-
-  // Snap guides
+  // Visual state for rendering
+  const [drawPreview, setDrawPreview] = useState<{ start: Point; current: Point } | null>(null);
+  const [marqueeBox, setMarqueeBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   const [snapGuides, setSnapGuides] = useState<{ type: 'x' | 'y'; position: number; length: number; start: number }[]>([]);
-
-  // LaTeX editing
   const [editingLatex, setEditingLatex] = useState<string | null>(null);
   const [latexInput, setLatexInput] = useState('');
 
@@ -66,8 +63,8 @@ const Canvas: React.FC<CanvasProps> = ({
     };
   }, [zoom, svgRef]);
 
-  // Snap to grid
-  const snapToGrid = useCallback((point: Point): { point: Point; guides: typeof snapGuides } => {
+  // Snap to grid and other elements
+  const snapPoint = useCallback((point: Point): { point: Point; guides: typeof snapGuides } => {
     const guides: typeof snapGuides = [];
     let snappedX = point.x;
     let snappedY = point.y;
@@ -88,8 +85,8 @@ const Canvas: React.FC<CanvasProps> = ({
     // Snap to other elements
     elements.forEach(el => {
       if (selectedIds.includes(el.id)) return;
-      const elCenterX = el.x + (el.width || 0) / 2;
-      const elCenterY = el.y + (el.height || 0) / 2;
+      const elCenterX = el.x + (el.width || 60) / 2;
+      const elCenterY = el.y + (el.height || 60) / 2;
 
       if (Math.abs(point.x - elCenterX) < SNAP_THRESHOLD) {
         snappedX = elCenterX;
@@ -112,97 +109,102 @@ const Canvas: React.FC<CanvasProps> = ({
     return { point: { x: snappedX, y: snappedY }, guides };
   }, [elements, selectedIds]);
 
-  // Mouse handlers
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (e.button !== 0) return; // Only left click
+  // Canvas background mouse handlers
+  const handleCanvasMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
     const point = getSVGPoint(e);
 
     if (tool === 'select') {
       // Start marquee selection
-      setIsMarquee(true);
-      setMarqueeStart(point);
-      setMarqueeEnd(point);
+      interactionRef.current = {
+        mode: 'marquee',
+        startPoint: point,
+        currentPoint: point,
+        dragOffsets: new Map(),
+      };
+      setMarqueeBox({ x: point.x, y: point.y, w: 0, h: 0 });
       if (!e.shiftKey) {
         onSelectElements([]);
       }
-    } else if (tool === 'eraser') {
-      // Eraser handled by element click
-    } else {
+    } else if (tool !== 'eraser') {
       // Start drawing
-      setIsDrawing(true);
-      setDrawStart(point);
-      setDrawCurrent(point);
+      interactionRef.current = {
+        mode: 'drawing',
+        startPoint: point,
+        currentPoint: point,
+        dragOffsets: new Map(),
+      };
+      setDrawPreview({ start: point, current: point });
     }
   }, [tool, getSVGPoint, onSelectElements]);
 
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+  const handleCanvasMouseMove = useCallback((e: React.MouseEvent) => {
     const point = getSVGPoint(e);
+    const interaction = interactionRef.current;
 
-    if (isDrawing && drawStart) {
-      setDrawCurrent(point);
-    } else if (isMarquee && marqueeStart) {
-      setMarqueeEnd(point);
-    } else if (isDragging && dragStart) {
-      const dx = point.x - dragStart.x;
-      const dy = point.y - dragStart.y;
+    if (interaction.mode === 'drawing' && interaction.startPoint) {
+      interaction.currentPoint = point;
+      setDrawPreview({ start: interaction.startPoint, current: point });
+    } else if (interaction.mode === 'marquee' && interaction.startPoint) {
+      interaction.currentPoint = point;
+      const x = Math.min(interaction.startPoint.x, point.x);
+      const y = Math.min(interaction.startPoint.y, point.y);
+      const w = Math.abs(point.x - interaction.startPoint.x);
+      const h = Math.abs(point.y - interaction.startPoint.y);
+      setMarqueeBox({ x, y, w, h });
+    } else if (interaction.mode === 'dragging' && interaction.startPoint) {
+      const dx = point.x - interaction.startPoint.x;
+      const dy = point.y - interaction.startPoint.y;
 
-      dragOffsets.forEach((offset, id) => {
+      interaction.dragOffsets.forEach((offset, id) => {
         const newPos = { x: offset.x + dx, y: offset.y + dy };
-        const snapped = snapToGrid(newPos);
+        const snapped = snapPoint(newPos);
         onUpdateElement(id, { x: snapped.point.x, y: snapped.point.y });
         setSnapGuides(snapped.guides);
       });
     }
-  }, [isDrawing, drawStart, isMarquee, marqueeStart, isDragging, dragStart, dragOffsets, getSVGPoint, snapToGrid, onUpdateElement]);
+  }, [getSVGPoint, snapPoint, onUpdateElement]);
 
-  const handleMouseUp = useCallback((e: React.MouseEvent) => {
+  const handleCanvasMouseUp = useCallback((e: React.MouseEvent) => {
     const point = getSVGPoint(e);
+    const interaction = interactionRef.current;
 
-    if (isDrawing && drawStart) {
-      // Create element with dragged bounds
-      const x = Math.min(drawStart.x, point.x);
-      const y = Math.min(drawStart.y, point.y);
-      const w = Math.abs(point.x - drawStart.x);
-      const h = Math.abs(point.y - drawStart.y);
-
-      // Minimum size
-      const minSize = 10;
-      const width = Math.max(w, minSize);
-      const height = Math.max(h, minSize);
+    if (interaction.mode === 'drawing' && interaction.startPoint) {
+      // Create element
+      const start = interaction.startPoint;
+      const x = Math.min(start.x, point.x);
+      const y = Math.min(start.y, point.y);
+      const w = Math.max(Math.abs(point.x - start.x), 20);
+      const h = Math.max(Math.abs(point.y - start.y), 20);
 
       const id = crypto.randomUUID();
       const newElement: DiagramElement = {
         id, type: tool,
-        x, y, width, height,
+        x, y, width: w, height: h,
         color: '#1f2937', strokeWidth: 2,
         nodes: [],
       };
 
-      // Set default content
       if (tool === 'text') newElement.text = 'Text';
       if (tool === 'latex') newElement.latex = 'E = mc^2';
 
-      // Set points for line-based elements
       if (['line', 'arrow', 'wire', 'force', 'ray', 'decay_arrow', 'dimension', 'optical_axis', 'fieldline'].includes(tool)) {
-        newElement.points = [drawStart, point];
+        newElement.points = [start, point];
         newElement.nodes = [
-          { id: crypto.randomUUID(), x: drawStart.x, y: drawStart.y, type: 'vertex' },
+          { id: crypto.randomUUID(), x: start.x, y: start.y, type: 'vertex' },
           { id: crypto.randomUUID(), x: point.x, y: point.y, type: 'vertex' },
         ];
       }
 
       onAddElement(newElement);
-      setIsDrawing(false);
-      setDrawStart(null);
-      setDrawCurrent(null);
-    } else if (isMarquee && marqueeStart) {
+      setDrawPreview(null);
+    } else if (interaction.mode === 'marquee' && interaction.startPoint) {
       // Complete marquee selection
-      const x1 = Math.min(marqueeStart.x, point.x);
-      const y1 = Math.min(marqueeStart.y, point.y);
-      const x2 = Math.max(marqueeStart.x, point.x);
-      const y2 = Math.max(marqueeStart.y, point.y);
+      const x1 = Math.min(interaction.startPoint.x, point.x);
+      const y1 = Math.min(interaction.startPoint.y, point.y);
+      const x2 = Math.max(interaction.startPoint.x, point.x);
+      const y2 = Math.max(interaction.startPoint.y, point.y);
 
-      // Find elements within marquee
       const selected = elements.filter(el => {
         const elX = el.x;
         const elY = el.y;
@@ -215,20 +217,23 @@ const Canvas: React.FC<CanvasProps> = ({
         onSelectElements(selected);
       }
 
-      setIsMarquee(false);
-      setMarqueeStart(null);
-      setMarqueeEnd(null);
-    } else if (isDragging) {
-      setIsDragging(false);
-      setDragStart(null);
-      setDragOffsets(new Map());
+      setMarqueeBox(null);
+    } else if (interaction.mode === 'dragging') {
       setSnapGuides([]);
     }
-  }, [isDrawing, drawStart, isMarquee, marqueeStart, isDragging, tool, getSVGPoint, elements, onAddElement, onSelectElements]);
 
-  // Element interaction
+    interactionRef.current = {
+      mode: 'idle',
+      startPoint: null,
+      currentPoint: null,
+      dragOffsets: new Map(),
+    };
+  }, [tool, getSVGPoint, elements, onAddElement, onSelectElements]);
+
+  // Element mouse handlers
   const handleElementMouseDown = useCallback((e: React.MouseEvent, element: DiagramElement) => {
     e.stopPropagation();
+    e.preventDefault();
 
     if (tool === 'eraser') {
       onDeleteElement(element.id);
@@ -239,26 +244,31 @@ const Canvas: React.FC<CanvasProps> = ({
       const point = getSVGPoint(e);
 
       // Select element
+      let newSelection = selectedIds;
       if (e.shiftKey) {
         if (selectedIds.includes(element.id)) {
-          onSelectElements(selectedIds.filter(id => id !== element.id));
+          newSelection = selectedIds.filter(id => id !== element.id);
         } else {
-          onSelectElements([...selectedIds, element.id]);
+          newSelection = [...selectedIds, element.id];
         }
-      } else if (!selectedIds.includes(element.id)) {
-        onSelectElements([element.id]);
+      } else {
+        newSelection = [element.id];
       }
+      onSelectElements(newSelection);
 
       // Start dragging
-      setIsDragging(true);
-      setDragStart(point);
       const offsets = new Map<string, Point>();
-      const idsToMove = selectedIds.includes(element.id) ? selectedIds : [element.id];
-      idsToMove.forEach(id => {
+      newSelection.forEach(id => {
         const el = elements.find(e => e.id === id);
         if (el) offsets.set(id, { x: el.x, y: el.y });
       });
-      setDragOffsets(offsets);
+
+      interactionRef.current = {
+        mode: 'dragging',
+        startPoint: point,
+        currentPoint: point,
+        dragOffsets: offsets,
+      };
     }
   }, [tool, getSVGPoint, selectedIds, elements, onSelectElements, onDeleteElement]);
 
@@ -293,7 +303,6 @@ const Canvas: React.FC<CanvasProps> = ({
       case 'w': newX = point.x; newW = x + w - point.x; break;
     }
 
-    // Minimum size
     const minSize = 20;
     if (newW < minSize) { newW = minSize; if (handle.includes('w')) newX = x + w - minSize; }
     if (newH < minSize) { newH = minSize; if (handle.includes('n')) newY = y + h - minSize; }
@@ -305,17 +314,17 @@ const Canvas: React.FC<CanvasProps> = ({
     onUpdateElement(id, { rotation: angle });
   }, [onUpdateElement]);
 
-  // Render preview while drawing
+  // Render draw preview
   const renderDrawPreview = () => {
-    if (!isDrawing || !drawStart || !drawCurrent) return null;
-
+    if (!drawPreview) return null;
+    const { start, current } = drawPreview;
     const isLine = ['line', 'arrow', 'wire', 'force', 'ray', 'decay_arrow', 'dimension', 'optical_axis', 'fieldline'].includes(tool);
 
     if (isLine) {
       return (
         <line
-          x1={drawStart.x} y1={drawStart.y}
-          x2={drawCurrent.x} y2={drawCurrent.y}
+          x1={start.x} y1={start.y}
+          x2={current.x} y2={current.y}
           stroke="#1a73e8" strokeWidth={2 / zoom}
           strokeDasharray={`${5 / zoom},${5 / zoom}`}
           opacity={0.7}
@@ -323,17 +332,17 @@ const Canvas: React.FC<CanvasProps> = ({
       );
     }
 
-    const x = Math.min(drawStart.x, drawCurrent.x);
-    const y = Math.min(drawStart.y, drawCurrent.y);
-    const w = Math.abs(drawCurrent.x - drawStart.x);
-    const h = Math.abs(drawCurrent.y - drawStart.y);
+    const x = Math.min(start.x, current.x);
+    const y = Math.min(start.y, current.y);
+    const w = Math.abs(current.x - start.x);
+    const h = Math.abs(current.y - start.y);
 
     if (tool === 'circle') {
       const r = Math.sqrt(w * w + h * h) / 2;
       return (
         <circle
-          cx={drawStart.x + (drawCurrent.x - drawStart.x) / 2}
-          cy={drawStart.y + (drawCurrent.y - drawStart.y) / 2}
+          cx={start.x + (current.x - start.x) / 2}
+          cy={start.y + (current.y - start.y) / 2}
           r={r}
           stroke="#1a73e8" strokeWidth={2 / zoom}
           strokeDasharray={`${5 / zoom},${5 / zoom}`}
@@ -352,34 +361,14 @@ const Canvas: React.FC<CanvasProps> = ({
     );
   };
 
-  // Render marquee
-  const renderMarquee = () => {
-    if (!isMarquee || !marqueeStart || !marqueeEnd) return null;
-    const x = Math.min(marqueeStart.x, marqueeEnd.x);
-    const y = Math.min(marqueeStart.y, marqueeEnd.y);
-    const w = Math.abs(marqueeEnd.x - marqueeStart.x);
-    const h = Math.abs(marqueeEnd.y - marqueeStart.y);
-
-    return (
-      <rect
-        x={x} y={y} width={w} height={h}
-        stroke="#1a73e8" strokeWidth={1 / zoom}
-        strokeDasharray={`${4 / zoom},${4 / zoom}`}
-        fill="rgba(26, 115, 232, 0.05)"
-      />
-    );
-  };
-
-  // Get cursor
   const getCursor = () => {
-    if (tool === 'select') return isDragging ? 'grabbing' : 'default';
+    if (tool === 'select') return interactionRef.current.mode === 'dragging' ? 'grabbing' : 'default';
     if (tool === 'eraser') return 'crosshair';
     return 'crosshair';
   };
 
   return (
     <div className="relative w-full h-full overflow-hidden bg-white">
-      {/* Grid */}
       {showGrid && (
         <div className="absolute inset-0 opacity-20" style={{
           backgroundImage: 'radial-gradient(circle, #94a3b8 1px, transparent 1px)',
@@ -390,13 +379,14 @@ const Canvas: React.FC<CanvasProps> = ({
       <svg
         ref={svgRef}
         className="w-full h-full relative z-10"
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
+        onMouseDown={handleCanvasMouseDown}
+        onMouseMove={handleCanvasMouseMove}
+        onMouseUp={handleCanvasMouseUp}
         onMouseLeave={() => {
-          if (isDrawing) { setIsDrawing(false); setDrawStart(null); setDrawCurrent(null); }
-          if (isMarquee) { setIsMarquee(false); setMarqueeStart(null); setMarqueeEnd(null); }
-          if (isDragging) { setIsDragging(false); setDragStart(null); setDragOffsets(new Map()); setSnapGuides([]); }
+          interactionRef.current = { mode: 'idle', startPoint: null, currentPoint: null, dragOffsets: new Map() };
+          setDrawPreview(null);
+          setMarqueeBox(null);
+          setSnapGuides([]);
         }}
         style={{ cursor: getCursor() }}
       >
@@ -410,7 +400,7 @@ const Canvas: React.FC<CanvasProps> = ({
                   width={element.width || 200} height={element.height || 60}
                   onMouseDown={(e) => handleElementMouseDown(e, element)}
                   onDoubleClick={(e) => handleElementDoubleClick(e, element)}
-                  style={{ cursor: tool === 'select' ? (isDragging ? 'grabbing' : 'grab') : 'crosshair', overflow: 'visible' }}
+                  style={{ cursor: tool === 'select' ? 'move' : 'crosshair', overflow: 'visible' }}
                 >
                   <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <div dangerouslySetInnerHTML={{
@@ -453,7 +443,15 @@ const Canvas: React.FC<CanvasProps> = ({
           {renderDrawPreview()}
 
           {/* Marquee */}
-          {renderMarquee()}
+          {marqueeBox && (
+            <rect
+              x={marqueeBox.x} y={marqueeBox.y}
+              width={marqueeBox.w} height={marqueeBox.h}
+              stroke="#1a73e8" strokeWidth={1 / zoom}
+              strokeDasharray={`${4 / zoom},${4 / zoom}`}
+              fill="rgba(26, 115, 232, 0.05)"
+            />
+          )}
         </g>
       </svg>
 
