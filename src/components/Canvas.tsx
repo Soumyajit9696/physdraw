@@ -425,34 +425,43 @@ const Canvas: React.FC<CanvasProps> = ({
       >
         <g transform={`translate(${panOffset.x}, ${panOffset.y}) scale(${zoom})`}>
           {/* Render elements */}
-          {elements.map(element => (
-            <g key={element.id}>
-              {element.type === 'latex' ? (
-                <foreignObject
-                  x={element.x} y={element.y}
-                  width={element.width || 200} height={element.height || 60}
-                  onMouseDown={(e) => handleElementMouseDown(e, element)}
-                  onDoubleClick={(e) => handleElementDoubleClick(e, element)}
-                  style={{ cursor: tool === 'select' ? 'move' : 'crosshair', overflow: 'visible' }}
-                >
-                  <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <div dangerouslySetInnerHTML={{
-                      __html: katex.renderToString(element.latex || 'E=mc^2', { throwOnError: false, displayMode: false }),
-                    }} />
-                  </div>
-                </foreignObject>
-              ) : (
-                <ElementRenderer
-                  element={element}
-                  isSelected={selectedIds.includes(element.id)}
-                  onMouseDown={(e) => handleElementMouseDown(e, element)}
-                  onClick={(e) => e.stopPropagation()}
-                  onDoubleClick={(e) => handleElementDoubleClick(e, element)}
-                  tool={tool}
-                />
-              )}
-            </g>
-          ))}
+          {elements.map(element => {
+            const centerX = element.x + (element.width || 60) / 2;
+            const centerY = element.y + (element.height || 60) / 2;
+            const rotation = element.rotation || 0;
+            
+            return (
+              <g 
+                key={element.id}
+                transform={rotation ? `rotate(${rotation} ${centerX} ${centerY})` : undefined}
+              >
+                {element.type === 'latex' ? (
+                  <foreignObject
+                    x={element.x} y={element.y}
+                    width={element.width || 200} height={element.height || 60}
+                    onMouseDown={(e) => handleElementMouseDown(e, element)}
+                    onDoubleClick={(e) => handleElementDoubleClick(e, element)}
+                    style={{ cursor: tool === 'select' ? 'move' : 'crosshair', overflow: 'visible' }}
+                  >
+                    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <div dangerouslySetInnerHTML={{
+                        __html: katex.renderToString(element.latex || 'E=mc^2', { throwOnError: false, displayMode: false }),
+                      }} />
+                    </div>
+                  </foreignObject>
+                ) : (
+                  <ElementRenderer
+                    element={element}
+                    isSelected={selectedIds.includes(element.id)}
+                    onMouseDown={(e) => handleElementMouseDown(e, element)}
+                    onClick={(e) => e.stopPropagation()}
+                    onDoubleClick={(e) => handleElementDoubleClick(e, element)}
+                    tool={tool}
+                  />
+                )}
+              </g>
+            );
+          })}
 
           {/* Selection handles */}
           {tool === 'select' && selectedIds.length === 1 && (() => {
