@@ -64,6 +64,24 @@ export interface DiagramElement {
   locked?: boolean;
   visible?: boolean;
   name?: string;
+  // Group support
+  groupId?: string;
+  // Style properties
+  shadow?: boolean;
+  shadowColor?: string;
+  shadowBlur?: number;
+  shadowOffsetX?: number;
+  shadowOffsetY?: number;
+  borderRadius?: number;
+  // Arrow styles
+  startArrow?: 'none' | 'arrow' | 'diamond' | 'circle' | 'open';
+  endArrow?: 'none' | 'arrow' | 'diamond' | 'circle' | 'open';
+  // Text alignment
+  textAlign?: 'left' | 'center' | 'right';
+  verticalAlign?: 'top' | 'middle' | 'bottom';
+  fontWeight?: 'normal' | 'bold';
+  fontStyle?: 'normal' | 'italic';
+  textDecoration?: 'none' | 'underline';
   // Specific properties
   chargeSign?: '+' | '-' | '0';
   springCoils?: number;

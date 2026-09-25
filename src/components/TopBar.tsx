@@ -14,12 +14,29 @@ interface TopBarProps {
   onFormulas: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
+  onCopy: () => void;
+  onPaste: () => void;
+  onCut: () => void;
+  onGroup: () => void;
+  onUngroup: () => void;
+  onLock: () => void;
+  onUnlock: () => void;
+  onAlignLeft: () => void;
+  onAlignCenter: () => void;
+  onAlignRight: () => void;
+  onAlignTop: () => void;
+  onAlignMiddle: () => void;
+  onAlignBottom: () => void;
   zoom: number;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onZoomReset: () => void;
   showGrid: boolean;
   onToggleGrid: () => void;
+  showRulers: boolean;
+  onToggleRulers: () => void;
+  snapToGrid: boolean;
+  onToggleSnap: () => void;
   canUndo: boolean;
   canRedo: boolean;
   hasSelection: boolean;
@@ -27,8 +44,11 @@ interface TopBarProps {
 
 const TopBar: React.FC<TopBarProps> = ({
   currentTool, onToolChange, onUndo, onRedo, onClear, onSave, onLoad,
-  onExport, onTemplates, onFormulas, onDelete, onDuplicate, zoom, onZoomIn, onZoomOut, onZoomReset,
-  showGrid, onToggleGrid, canUndo, canRedo, hasSelection
+  onExport, onTemplates, onFormulas, onDelete, onDuplicate, onCopy, onPaste, onCut,
+  onGroup, onUngroup, onLock, onUnlock, onAlignLeft, onAlignCenter, onAlignRight,
+  onAlignTop, onAlignMiddle, onAlignBottom, zoom, onZoomIn, onZoomOut, onZoomReset,
+  showGrid, onToggleGrid, showRulers, onToggleRulers, snapToGrid, onToggleSnap,
+  canUndo, canRedo, hasSelection
 }) => {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -66,15 +86,40 @@ const TopBar: React.FC<TopBarProps> = ({
       { label: 'Undo', action: onUndo, shortcut: 'Ctrl+Z', disabled: !canUndo },
       { label: 'Redo', action: onRedo, shortcut: 'Ctrl+Y', disabled: !canRedo },
       { type: 'separator' as const },
+      { label: 'Cut', action: onCut, shortcut: 'Ctrl+X', disabled: !hasSelection },
+      { label: 'Copy', action: onCopy, shortcut: 'Ctrl+C', disabled: !hasSelection },
+      { label: 'Paste', action: onPaste, shortcut: 'Ctrl+V' },
+      { type: 'separator' as const },
+      { label: 'Duplicate', action: onDuplicate, shortcut: 'Ctrl+D', disabled: !hasSelection },
+      { label: 'Delete', action: onDelete, shortcut: 'Del', disabled: !hasSelection },
+      { type: 'separator' as const },
       { label: 'Select All', action: () => {}, shortcut: 'Ctrl+A' },
-      { label: 'Duplicate', action: () => {}, shortcut: 'Ctrl+D' },
-      { label: 'Delete', action: () => {}, shortcut: 'Del' },
+      { label: 'Group', action: onGroup, shortcut: 'Ctrl+G', disabled: !hasSelection },
+      { label: 'Ungroup', action: onUngroup, shortcut: 'Ctrl+U', disabled: !hasSelection },
+      { type: 'separator' as const },
+      { label: 'Lock', action: onLock, shortcut: 'Ctrl+L', disabled: !hasSelection },
+      { label: 'Unlock', action: onUnlock, disabled: !hasSelection },
     ],
     view: [
       { label: showGrid ? '✓ Grid' : 'Grid', action: onToggleGrid },
+      { label: showRulers ? '✓ Rulers' : 'Rulers', action: onToggleRulers },
+      { label: snapToGrid ? '✓ Snap to Grid' : 'Snap to Grid', action: onToggleSnap },
+      { type: 'separator' as const },
       { label: 'Zoom In', action: onZoomIn, shortcut: 'Ctrl+=' },
       { label: 'Zoom Out', action: onZoomOut, shortcut: 'Ctrl+-' },
       { label: 'Zoom 100%', action: onZoomReset, shortcut: 'Ctrl+0' },
+    ],
+    arrange: [
+      { label: 'Bring to Front', action: () => {}, shortcut: ']', disabled: !hasSelection },
+      { label: 'Send to Back', action: () => {}, shortcut: '[', disabled: !hasSelection },
+      { type: 'separator' as const },
+      { label: 'Align Left', action: onAlignLeft, disabled: !hasSelection },
+      { label: 'Align Center', action: onAlignCenter, disabled: !hasSelection },
+      { label: 'Align Right', action: onAlignRight, disabled: !hasSelection },
+      { type: 'separator' as const },
+      { label: 'Align Top', action: onAlignTop, disabled: !hasSelection },
+      { label: 'Align Middle', action: onAlignMiddle, disabled: !hasSelection },
+      { label: 'Align Bottom', action: onAlignBottom, disabled: !hasSelection },
     ],
     insert: [
       { label: 'Templates...', action: onTemplates },
